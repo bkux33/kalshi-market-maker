@@ -191,3 +191,14 @@ def test_live_broker_fills_dedupe_and_cancel():
     assert len(fills) == 1 and pf.pos("s", "M").qty == 3 and o.remaining == 1
     b.cancel(o.order_id, 2)
     assert rest.cancelled == ["EX1"] and o.status == "canceled"
+
+
+def test_cli_live_refuses_cleanly(tmp_path, monkeypatch):
+    from alphalab.cli import main
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("TRADING_MODE", "live")
+    for k in ("LIVE_TRADING_ACK", "KALSHI_API_KEY_ID", "KALSHI_PRIVATE_KEY_PATH"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(SystemExit) as e:
+        main(["live", "--strategy", "imbalance", "--series", "KXBTC15M"])
+    assert "Live trading refused" in str(e.value.code) and "LIVE_TRADING_ACK" in str(e.value.code)

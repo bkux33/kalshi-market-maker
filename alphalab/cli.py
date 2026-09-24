@@ -226,8 +226,11 @@ def cmd_live(a, s: Settings) -> None:
     strategies = _strategies_from_args(a)
     keys = [strategy_key(st.name, st.params) for st in strategies]
     try:
-        with _db(s, read_only=True) as db:
-            assert_live_allowed(s, db, keys, demo_integration=a.demo_integration)
+        if s.data.db_path.exists():
+            with _db(s, read_only=True) as db:
+                assert_live_allowed(s, db, keys, demo_integration=a.demo_integration)
+        else:
+            assert_live_allowed(s, None, keys, demo_integration=a.demo_integration)
     except LiveTradingRefused as exc:
         sys.exit(str(exc))
     rest, signer = _rest(s, auth=True)
@@ -367,7 +370,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     except ImportError:
         pass
     settings = load_settings(args.config)
-    args.fn(args, settings)
+    from alphalab.kalshi.rest import KalshiAPIError
+    try:
+        args.fn(args, settings)
+    except KalshiAPIError as exc:
+        sys.exit(f"Kalshi API error: {exc}. Check network access, KALSHI_ENV and credentials.")
 
 
 if __name__ == "__main__":
