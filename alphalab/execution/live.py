@@ -84,26 +84,24 @@ def assert_live_allowed(settings: Settings, db: Optional[Database], strategy_key
 
 
 def order_body(req: OrderRequest, client_order_id: str) -> Dict[str, Any]:
-    """Map a YES-book order to Kalshi's API.
+    """Map a YES-book order to Kalshi's V2 order request (POST /portfolio/events/orders).
 
-    buy YES at p  -> side=yes, action=buy, yes_price_dollars=p
-    sell YES at p -> side=no,  action=buy, no_price_dollars=1-p
-    (Kalshi nets YES and NO holdings in a market, so buying NO also closes a
-    long YES position; it never requires already holding the contract.)
+    V2 uses a single YES book: ``side="bid"`` buys YES at ``price``; ``side="ask"``
+    sells YES at ``price`` (economically buying NO at 1 - price; Kalshi nets YES/NO
+    holdings). Prices are fixed-point dollar strings, counts fixed-point strings.
+    ``self_trade_prevention_type`` is required by the V2 schema.
     """
-    if req.action == "buy":
-        side, price_key, units = "yes", "yes_price_dollars", req.price
-    else:
-        side, price_key, units = "no", "no_price_dollars", PRICE_SCALE - req.price
-    body = {
-        "ticker": req.market, "side": side, "action": "buy", "type": "limit",
-        "count": int(req.qty), price_key: f"{units / PRICE_SCALE:.4f}", "client_order_id": client_order_id,
+    return {
+        "ticker": req.market,
+        "client_order_id": client_order_id,
+        "side": "bid" if req.action == "buy" else "ask",
+        "count": f"{req.qty:.2f}",
+        "price": f"{req.price / PRICE_SCALE:.4f}",
         "time_in_force": "immediate_or_cancel" if req.tif == "ioc" else "good_till_canceled",
+        "post_only": bool(req.post_only),
+        "self_trade_prevention_type": "taker_at_cross",
         "cancel_order_on_pause": True,
     }
-    if req.post_only:
-        body["post_only"] = True
-    return body
 
 
 class LiveBroker:
@@ -125,6 +123,7 @@ class LiveBroker:
         self._fid = itertools.count(1)
         self._lock = threading.Lock()
         self._seen_trade_ids: set = set()
+        self._pending_cancel: set = set()
         self.stats = {"submitted": 0, "rejected": 0, "canceled": 0, "maker_fills": 0, "taker_fills": 0,
                       "submitted_qty": 0.0, "filled_qty": 0.0, "api_errors": 0}
 
@@ -164,7 +163,7 @@ class LiveBroker:
     def _send(self, o: SimOrder) -> None:
         body = order_body(o.req, o.req.client_order_id)
         try:
-            resp = self.rest.create_order(body)
+            resp = self.rest.create_order_v2(body)
         except KalshiAPIError as exc:
             with self._lock:
                 self.stats["api_errors"] += 1
@@ -179,11 +178,21 @@ class LiveBroker:
             if exch:
                 self._by_exch[exch] = o.order_id
                 o.reason = f"exch:{exch}"
-            st = resp.get("status", "resting")
+            # V2 ack: fill_count / remaining_count (fixed-point strings), ts_ms. Fills themselves are
+            # applied only from the authenticated `fill` channel to avoid double counting.
+            o.ack = {"fill_count": parse_count(resp.get("fill_count") or 0),
+                     "remaining_count": parse_count(resp.get("remaining_count") or 0),
+                     "ts_ms": resp.get("ts_ms")}
             if o.status == "pending":
-                o.status = "resting" if st == "resting" else ("filled" if st == "executed" else "canceled")
-                if o.status != "resting":
+                if o.req.tif == "ioc" or o.ack["remaining_count"] <= 1e-9:
+                    o.status = "filled" if o.ack["fill_count"] >= o.req.qty - 1e-9 else "canceled"
                     o.ts_done = time.time_ns()
+                else:
+                    o.status = "resting"
+        if o.order_id in self._pending_cancel and o.is_open:
+            self._pending_cancel.discard(o.order_id)
+            self._cancel_exch(o, exch)
+            return
         if self.on_order:
             self.on_order(o)
 
@@ -198,11 +207,14 @@ class LiveBroker:
         exch = self._exch_id(o)
         if exch:
             self._run(self._cancel_exch, o, exch)
+        else:
+            self._pending_cancel.add(order_id)  # cancel as soon as the create ack arrives
         return True
 
     def _cancel_exch(self, o: SimOrder, exch: str) -> None:
         try:
-            self.rest.cancel_order(exch)
+            resp = self.rest.cancel_order_v2(exch, market_ticker=o.market)
+            o.cancel_ack = {"reduced_by": parse_count(resp.get("reduced_by") or 0), "ts_ms": resp.get("ts_ms")}
             with self._lock:
                 if o.is_open:
                     o.status, o.ts_done = "canceled", time.time_ns()
@@ -226,7 +238,7 @@ class LiveBroker:
             try:
                 for od in self.rest.get_orders(ticker=m, status="resting"):
                     try:
-                        self.rest.cancel_order(od["order_id"])
+                        self.rest.cancel_order_v2(od["order_id"], market_ticker=m)
                     except KalshiAPIError:
                         pass
             except KalshiAPIError:

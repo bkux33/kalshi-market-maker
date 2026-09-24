@@ -153,25 +153,28 @@ def test_demo_integration_only_on_demo(tmp_path):
         assert_live_allowed(live_settings(tmp_path, KALSHI_ENV="prod"), None, ["x"], demo_integration=True)
 
 
-def test_order_body_mapping():
+def test_order_body_mapping_v2():
     b = order_body(OrderRequest("s", "M", "buy", 45 * C, 3, tif="gtc", post_only=True), "cid")
-    assert (b["side"], b["action"], b["yes_price_dollars"], b["count"], b["post_only"]) == ("yes", "buy", "0.4500", 3, True)
-    b = order_body(OrderRequest("s", "M", "sell", 45 * C, 3, tif="ioc"), "cid")
-    assert (b["side"], b["action"], b["no_price_dollars"], b["time_in_force"]) == ("no", "buy", "0.5500", "immediate_or_cancel")
-    assert "yes_price_dollars" not in b
+    assert b == {"ticker": "M", "client_order_id": "cid", "side": "bid", "count": "3.00", "price": "0.4500",
+                 "time_in_force": "good_till_canceled", "post_only": True,
+                 "self_trade_prevention_type": "taker_at_cross", "cancel_order_on_pause": True}
+    b = order_body(OrderRequest("s", "M", "sell", 4550, 2.5, tif="ioc"), "cid")
+    assert (b["side"], b["price"], b["count"], b["time_in_force"]) == ("ask", "0.4550", "2.50", "immediate_or_cancel")
+    assert "yes_price_dollars" not in b and "action" not in b  # legacy V1 fields are gone
 
 
 class FakeRest:
     def __init__(self):
         self.created, self.cancelled = [], []
 
-    def create_order(self, body):
+    def create_order_v2(self, body):
         self.created.append(body)
-        return {"order_id": f"EX{len(self.created)}", "status": "resting"}
+        return {"order_id": f"EX{len(self.created)}", "client_order_id": body["client_order_id"],
+                "fill_count": "0.00", "remaining_count": body["count"], "ts_ms": 1790000000000}
 
-    def cancel_order(self, oid):
-        self.cancelled.append(oid)
-        return {}
+    def cancel_order_v2(self, oid, market_ticker=None, subaccount=None):
+        self.cancelled.append((oid, market_ticker))
+        return {"order_id": oid, "reduced_by": "1.00", "ts_ms": 1790000000001}
 
 
 def test_live_broker_fills_dedupe_and_cancel():
@@ -190,7 +193,8 @@ def test_live_broker_fills_dedupe_and_cancel():
     b.on_private({"private": "fill", "msg": msg})  # duplicate delivery ignored
     assert len(fills) == 1 and pf.pos("s", "M").qty == 3 and o.remaining == 1
     b.cancel(o.order_id, 2)
-    assert rest.cancelled == ["EX1"] and o.status == "canceled"
+    assert rest.cancelled == [("EX1", "M")] and o.status == "canceled"
+    assert o.ack["remaining_count"] == 4.0 and o.cancel_ack["reduced_by"] == 1.0
 
 
 def test_cli_live_refuses_cleanly(tmp_path, monkeypatch):

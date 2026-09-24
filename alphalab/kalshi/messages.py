@@ -25,15 +25,46 @@ def _levels(msg: Dict[str, Any], fp_key: str, legacy_key: str):
 
 
 def _ts_to_ns(ts: Any) -> Optional[int]:
-    if ts is None or ts == "":
+    """Exchange timestamp -> epoch nanoseconds, without float precision loss.
+
+    Accepts epoch seconds (int/float, e.g. ``1669149841``), epoch milliseconds
+    (``ts_ms``-style ints >= 1e11), and ISO-8601 strings with up to nanosecond
+    fractions (``2026-09-24T12:00:00.123456789Z``)."""
+    if ts is None or ts == "" or isinstance(ts, bool):
         return None
-    if isinstance(ts, (int, float)):
-        # seconds or milliseconds
-        return int(ts * 1e9) if ts < 1e11 else int(ts * 1e6)
+    if isinstance(ts, int):
+        return ts * 1_000_000 if ts >= 100_000_000_000 else ts * 1_000_000_000
+    if isinstance(ts, float):
+        if ts >= 1e11:
+            return int(round(ts * 1_000_000))
+        return int(round(ts * 1_000_000_000))
+    return iso_to_ns(str(ts))
+
+
+def iso_to_ns(text: str) -> Optional[int]:
+    import re
+    from datetime import timezone
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})?$", text.strip())
+    if not m:
+        return None
+    base, frac, tz = m.groups()
     try:
-        return int(datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() * 1e9)
+        dt = datetime.fromisoformat(base + ("+00:00" if tz in (None, "Z") else tz))
     except ValueError:
         return None
+    secs = int(dt.astimezone(timezone.utc).timestamp())
+    nanos = int((frac or "0").ljust(9, "0"))
+    return secs * 1_000_000_000 + nanos
+
+
+def exch_ts_ns(msg: Dict[str, Any]) -> Optional[int]:
+    """Matching-engine timestamp: ``ts_ms`` (current API) preferred over ``ts``."""
+    if msg.get("ts_ms") is not None:
+        try:
+            return int(msg["ts_ms"]) * 1_000_000
+        except (TypeError, ValueError):
+            pass
+    return _ts_to_ns(msg.get("ts"))
 
 
 def _price(msg: Dict[str, Any], dollars_key: str, cents_key: str) -> Optional[int]:
@@ -66,14 +97,14 @@ def parse_frame(frame: Dict[str, Any], recv_ns: int) -> List[Event]:
             return []
         delta = parse_count(msg["delta_fp"]) if msg.get("delta_fp") is not None else float(msg.get("delta") or 0)
         return [BookDelta(recv_ns, market, msg.get("side", "yes"), price, delta, seq=seq, sid=sid,
-                          exch_ts_ns=_ts_to_ns(msg.get("ts")))]
+                          exch_ts_ns=exch_ts_ns(msg))]
     if typ == "trade":
         price = _price(msg, "yes_price_dollars", "yes_price")
         if price is None:
             return []
         return [TradeEvent(recv_ns, market, price, _count(msg, "count_fp", "count"),
                            msg.get("taker_side", ""), str(msg.get("trade_id", "")),
-                           exch_ts_ns=_ts_to_ns(msg.get("ts")))]
+                           exch_ts_ns=exch_ts_ns(msg))]
     if typ == "market_lifecycle_v2":
         ev = msg.get("event_type", "")
         out: List[Event] = [MarketStatus(recv_ns, market, ev, dict(msg))]

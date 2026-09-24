@@ -70,7 +70,14 @@ class MarketMeta:
     mutually_exclusive: Optional[bool] = None
     fee_type: Optional[str] = None
     fee_multiplier: Optional[float] = None
+    category: Optional[str] = None
+    exchange_index: Optional[int] = None
     extra: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def activity(self) -> float:
+        """Volume measure: 24h volume if the API still returns it, else lifetime volume."""
+        return float(self.volume_24h if self.volume_24h is not None else (self.volume or 0.0))
 
     @property
     def spread(self) -> Optional[int]:
@@ -85,7 +92,8 @@ class MarketMeta:
 
     def to_row(self) -> Dict[str, Any]:
         d = asdict(self)
-        d.pop("extra")
+        for k in ("extra", "category", "exchange_index"):
+            d.pop(k)
         return d
 
 
@@ -122,6 +130,9 @@ def market_from_api(m: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -
         liquidity_usd=_f(m.get("liquidity_dollars")),
         can_close_early=m.get("can_close_early"),
         mutually_exclusive=(event or {}).get("mutually_exclusive"),
+        category=(event or {}).get("category"),
+        exchange_index=m.get("exchange_index"),
+        extra={k: m.get(k) for k in ("yes_sub_title", "no_sub_title", "subtitle") if m.get(k)},
     )
 
 
@@ -176,10 +187,10 @@ def rank_for_recording(markets: Iterable[MarketMeta], now: Optional[float] = Non
             continue
         if m.yes_bid is None or m.yes_ask is None or m.yes_bid <= 0 or m.yes_ask >= 10_000:
             continue
-        if (m.volume_24h or 0) < min_volume_24h:
+        if m.activity < min_volume_24h:
             continue
         out.append(m)
-    out.sort(key=lambda m: (-(m.volume_24h or 0), -(m.open_interest or 0), m.ticker))
+    out.sort(key=lambda m: (-m.activity, -(m.open_interest or 0), m.ticker))
     return out
 
 
@@ -207,4 +218,69 @@ def discover(rest, series: Iterable[str] = (), status: str = "open", max_pages: 
             mm.mutually_exclusive = ev.get("mutually_exclusive")
             if ev.get("series_ticker"):
                 mm.series_ticker = ev["series_ticker"]
+    return out
+
+
+def series_categories(rest) -> Dict[str, str]:
+    """series_ticker -> category, from GET /series (category lives on the series, not the market)."""
+    try:
+        return {s.get("ticker"): s.get("category") or "" for s in rest.get_series_list(include_volume=False)
+                if s.get("ticker")}
+    except Exception:
+        return {}
+
+
+def find_markets(rest, *, status: Optional[str] = "open", series: Iterable[str] = (), category: Optional[str] = None,
+                 search: Optional[str] = None, min_volume: float = 0.0, min_seconds_to_close: Optional[float] = None,
+                 max_seconds_to_close: Optional[float] = None, two_sided: bool = False, max_spread_c: Optional[float] = None,
+                 max_pages: int = 10, sort: str = "volume", now: Optional[float] = None) -> List[MarketMeta]:
+    """Discover markets currently listed on the exchange, robust to which series exist.
+
+    Nothing is hard-coded: markets come from ``GET /markets`` (filtered server-side by
+    status/series), categories from ``GET /series``. ``search`` is a case-insensitive
+    match on ticker, event ticker, title and subtitles.
+    """
+    now = now or time.time()
+    cats = series_categories(rest)
+    series = list(series)
+    if category:
+        wanted = {t for t, c in cats.items() if (c or "").lower() == category.lower()}
+        series = sorted(set(series) & wanted) if series else sorted(wanted)
+        if not series:
+            return []
+    raw: List[Dict[str, Any]] = []
+    params: Dict[str, Any] = {}
+    if status:
+        params["status"] = status
+    if series:
+        for s in series:
+            raw.extend(rest.iter_markets(max_pages=max_pages, series_ticker=s, **params))
+    else:
+        raw.extend(rest.iter_markets(max_pages=max_pages, mve_filter="exclude", **params))
+    out: List[MarketMeta] = []
+    needle = (search or "").lower().strip()
+    for m in raw:
+        mm = market_from_api(m)
+        mm.category = cats.get(mm.series_ticker) or None
+        if needle:
+            hay = " ".join(str(x or "") for x in (mm.ticker, mm.event_ticker, mm.title, m.get("subtitle"),
+                                                  m.get("yes_sub_title"), m.get("no_sub_title"), mm.category)).lower()
+            if needle not in hay:
+                continue
+        if mm.activity < min_volume:
+            continue
+        ttc = mm.seconds_to_close(now)
+        if min_seconds_to_close is not None and (ttc is None or ttc < min_seconds_to_close):
+            continue
+        if max_seconds_to_close is not None and (ttc is None or ttc > max_seconds_to_close):
+            continue
+        if two_sided and (mm.yes_bid is None or mm.yes_ask is None or mm.yes_bid <= 0 or mm.yes_ask >= 10_000):
+            continue
+        if max_spread_c is not None and (mm.spread is None or mm.spread > max_spread_c * 100):
+            continue
+        out.append(mm)
+    keys = {"volume": lambda x: (-x.activity, x.ticker),
+            "close": lambda x: (x.close_ts or float("inf"), x.ticker),
+            "spread": lambda x: (x.spread if x.spread is not None else 10**9, -x.activity)}
+    out.sort(key=keys.get(sort, keys["volume"]))
     return out

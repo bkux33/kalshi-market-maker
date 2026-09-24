@@ -50,11 +50,91 @@ def cmd_discover(a, s: Settings) -> None:
         print(f"{m.ticker:40s} bid={m.yes_bid} ask={m.yes_ask} vol24h={m.volume_24h} close={m.close_ts}")
 
 
+def _market_row(m) -> str:
+    import time as _t
+    ttc = m.seconds_to_close()
+    close = "-" if ttc is None else (f"{ttc / 3600:.1f}h" if ttc >= 3600 else f"{ttc / 60:.0f}m")
+    bid = "-" if m.yes_bid is None else f"{m.yes_bid / 100:g}"
+    ask = "-" if m.yes_ask is None else f"{m.yes_ask / 100:g}"
+    return (f"{m.ticker[:44]:44s} {m.status[:8]:8s} {bid:>5s}/{ask:<5s} vol={m.activity:>10,.0f} "
+            f"close={close:>7s} {str(m.category or '-')[:14]:14s} {(m.title or '')[:60]}")
+
+
+def cmd_markets(a, s: Settings) -> None:
+    from alphalab.kalshi.discovery import find_markets
+    rest, _ = _rest(s)
+    status = "open" if a.active else a.status
+    ms = find_markets(rest, status=status, series=a.series or (), category=a.category, search=a.search,
+                      min_volume=a.min_volume, min_seconds_to_close=a.min_close_minutes * 60 if a.min_close_minutes else None,
+                      max_seconds_to_close=a.max_close_hours * 3600 if a.max_close_hours else None,
+                      two_sided=a.two_sided, max_spread_c=a.max_spread_c, max_pages=a.max_pages, sort=a.sort)
+    ms = ms[: a.limit]
+    if a.json:
+        _print([{**m.to_row(), "category": m.category, "activity": m.activity} for m in ms])
+        return
+    print(f"{len(ms)} markets ({s.kalshi.env.upper()} {s.kalshi.rest_base})")
+    for m in ms:
+        print(_market_row(m))
+
+
+def cmd_demo_check(a, s: Settings) -> None:
+    from alphalab.core.config import is_demo_url
+    from alphalab.data.tape import TapeWriter
+    from alphalab.kalshi.discovery import find_markets
+    from alphalab.kalshi.healthcheck import format_report, run_check
+    if s.kalshi.env != "demo" or not is_demo_url(s.kalshi.rest_base) or not is_demo_url(s.kalshi.ws_base):
+        sys.exit("demo-check only runs against the Kalshi DEMO environment (KALSHI_ENV=demo)")
+    rest, signer = _rest(s, auth=True)
+    markets = list(a.markets or [])
+    if not markets:
+        found = find_markets(rest, status="open", series=a.series or (), search=a.search, two_sided=True,
+                             min_seconds_to_close=120, sort="volume")
+        markets = [m.ticker for m in found[: a.n]]
+        if not markets:
+            sys.exit("no open two-sided markets found on DEMO for this selection; try `alphalab markets --active`")
+    tape = TapeWriter(s.data.raw_dir, prefix="democheck") if a.record else None
+    rep = asyncio.run(run_check(rest, signer, s.kalshi.ws_base, markets, a.seconds, "DEMO", tape=tape))
+    if tape:
+        tape.close()
+    s.data.state_dir.mkdir(parents=True, exist_ok=True)
+    (s.data.state_dir / "demo_check.json").write_text(json.dumps(rep, indent=2, default=str))
+    print(format_report(rep))
+    if not rep.get("ok"):
+        sys.exit(1)
+
+
+def cmd_demo_orders(a, s: Settings) -> None:
+    from alphalab.execution.demo_orders import DemoOnlyError, assert_demo, format_demo_orders, run_demo_orders
+    from alphalab.kalshi.discovery import find_markets
+    try:
+        assert_demo(s, s.kalshi.rest_base, s.kalshi.ws_base)
+    except DemoOnlyError as exc:
+        sys.exit(str(exc))
+    if not a.confirm_demo:
+        sys.exit("demo-orders places real orders on the DEMO exchange (fake money). Re-run with --confirm-demo.")
+    rest, signer = _rest(s, auth=True)
+    market = a.market
+    if not market:
+        found = find_markets(rest, status="open", search=a.search, two_sided=True, min_seconds_to_close=600)
+        if not found:
+            sys.exit("no open two-sided DEMO market found; pass --market")
+        market = found[0].ticker
+    rep = asyncio.run(run_demo_orders(s, rest, signer, s.kalshi.ws_base, market, attempt_fill=a.attempt_fill))
+    s.data.state_dir.mkdir(parents=True, exist_ok=True)
+    (s.data.state_dir / "demo_orders.json").write_text(json.dumps(rep, indent=2, default=str))
+    print(format_demo_orders(rep))
+    if not rep.get("ok"):
+        sys.exit(1)
+
+
 def cmd_record(a, s: Settings) -> None:
     from alphalab.data.recorder import run_recorder
     rest, signer = _rest(s, auth=True)
-    asyncio.run(run_recorder(s, rest, signer, a.series or s.series, a.markets or s.markets, external=a.external,
-                             max_markets=a.max_markets))
+    series = a.series if a.series is not None else ([] if (a.search or a.category or a.markets) else s.series)
+    out = asyncio.run(run_recorder(s, rest, signer, series, a.markets or s.markets, external=a.external,
+                                   max_markets=a.max_markets, search=a.search, category=a.category,
+                                   duration_s=a.duration))
+    _print(out)
 
 
 def cmd_ingest(a, s: Settings) -> None:
@@ -268,6 +348,18 @@ def cmd_ask(a, s: Settings) -> None:
             _print(assistant.answer_offline(db, a.question, a.experiment_id))
 
 
+def cmd_data_quality(a, s: Settings) -> None:
+    from alphalab.data.quality import audit_tape, render_markdown
+    raw = a.raw_dir or s.data.raw_dir
+    r = audit_tape(raw)
+    md = render_markdown(r, note=f"Source: `{raw}` (raw tape).")
+    if a.out:
+        from pathlib import Path as _P
+        _P(a.out).write_text(md)
+        print(f"wrote {a.out}")
+    print(md if not a.json else json.dumps(r, indent=2, default=str))
+
+
 def cmd_db_check(a, s: Settings) -> None:
     with _db(s, read_only=True) as db:
         _print(db.integrity_report())
@@ -291,11 +383,41 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("discover", cmd_discover, "list open markets for series (public REST)")
     sp.add_argument("--series", nargs="*")
     sp.add_argument("--limit", type=int, default=50)
-    sp = add("record", cmd_record, "record raw market data to the tape (needs API key for WebSocket)")
+    sp = add("markets", cmd_markets, "discover markets currently listed on the exchange (public REST)")
+    sp.add_argument("--active", action="store_true", help="only open markets (same as --status open)")
+    sp.add_argument("--status", default=None, choices=["unopened", "open", "paused", "closed", "settled"])
+    sp.add_argument("--search", help="case-insensitive match on ticker/event/title/subtitles/category")
     sp.add_argument("--series", nargs="*")
+    sp.add_argument("--category", help="series category, e.g. Crypto, Economics, Sports")
+    sp.add_argument("--min-volume", type=float, default=0.0)
+    sp.add_argument("--min-close-minutes", type=float)
+    sp.add_argument("--max-close-hours", type=float)
+    sp.add_argument("--two-sided", action="store_true", help="require both a bid and an ask")
+    sp.add_argument("--max-spread-c", type=float)
+    sp.add_argument("--sort", default="volume", choices=["volume", "close", "spread"])
+    sp.add_argument("--limit", type=int, default=50)
+    sp.add_argument("--max-pages", type=int, default=10)
+    sp.add_argument("--json", action="store_true")
+    sp = add("demo-check", cmd_demo_check, "DEMO market-data health check: auth, WS, book rebuild (no orders)")
     sp.add_argument("--markets", nargs="*")
+    sp.add_argument("--series", nargs="*")
+    sp.add_argument("--search")
+    sp.add_argument("--n", type=int, default=3, help="number of markets to auto-select")
+    sp.add_argument("--seconds", type=float, default=60.0)
+    sp.add_argument("--no-record", dest="record", action="store_false", help="do not write raw frames to the tape")
+    sp = add("demo-orders", cmd_demo_orders, "DEMO-only order-path test (create/ack/cancel/dup/reconnect/kill)")
+    sp.add_argument("--market")
+    sp.add_argument("--search")
+    sp.add_argument("--attempt-fill", action="store_true", help="also send small marketable IOC orders (DEMO money)")
+    sp.add_argument("--confirm-demo", action="store_true", help="required: acknowledge orders go to the DEMO exchange")
+    sp = add("record", cmd_record, "record raw market data to the tape (needs API key for WebSocket)")
+    sp.add_argument("--series", nargs="*", default=None)
+    sp.add_argument("--markets", nargs="*")
+    sp.add_argument("--search", help="select markets by text (uses the markets finder)")
+    sp.add_argument("--category")
     sp.add_argument("--external", action="store_true", help="also record Coinbase spot prices")
     sp.add_argument("--max-markets", type=int, default=100)
+    sp.add_argument("--duration", type=float, help="stop after N seconds (default: run until Ctrl-C)")
     sp = add("ingest", cmd_ingest, "load closed tape files and journals into DuckDB")
     sp.add_argument("--include-open", action="store_true")
     sp = add("import-csv", cmd_import, "import a third-party CSV sample")
@@ -357,6 +479,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("question")
     sp.add_argument("--experiment-id")
     add("db-check", cmd_db_check, "database integrity report")
+    sp = add("data-quality", cmd_data_quality, "audit raw recordings: gaps, duplicates, timestamps, validity")
+    sp.add_argument("--raw-dir")
+    sp.add_argument("--out", help="write the markdown report to this path")
+    sp.add_argument("--json", action="store_true")
     add("config", cmd_config, "print effective configuration (secrets redacted)")
     return p
 

@@ -22,6 +22,7 @@ import json
 import logging
 import random
 import time
+from collections import deque
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set
 
 from alphalab.core.book_manager import BookManager
@@ -70,9 +71,14 @@ class KalshiWebSocket:
         self._sids: Dict[int, str] = {}           # sid -> channel
         self._pending: Dict[int, str] = {}         # cmd id -> channel
         self._resync_requested = False
+        self._seen_trades: Set[str] = set()
+        self._closed_sids: Set[int] = set()
+        self._seen_order: "deque[str]" = deque()
         self.connected = False
-        self.stats: Dict[str, Any] = {"messages": 0, "reconnects": 0, "gaps": 0,
-                                      "last_msg_ns": 0, "errors": 0, "connected_since": None}
+        self.stats: Dict[str, Any] = {"messages": 0, "reconnects": 0, "gaps": 0, "duplicates": 0,
+                                      "malformed": 0, "error_frames": 0, "by_type": {},
+                                      "last_msg_ns": 0, "errors": 0, "connected_since": None,
+                                      "connections": 0}
 
     # ------------------------------------------------------------------ public api
     async def run(self) -> None:
@@ -91,7 +97,7 @@ class KalshiWebSocket:
                 if self.connected:
                     self.connected = False
                     self._emit_status("disconnected", {})
-                self.books.synced.clear()
+                self.books.reset_all()  # sids/seqs restart on the next connection
             if not self._running:
                 break
             self.stats["reconnects"] += 1
@@ -142,6 +148,7 @@ class KalshiWebSocket:
 
     async def _subscribe_all(self) -> None:
         self._sids.clear()
+        self._closed_sids.clear()  # sid numbering restarts on a new connection
         self._pending.clear()
         for ch in self.channels:
             params: Dict[str, Any] = {"channels": [ch]}
@@ -157,6 +164,7 @@ class KalshiWebSocket:
             if ch == "orderbook_delta":
                 await self._send({"id": self._next_id(), "cmd": "unsubscribe", "params": {"sids": [sid]}})
                 self._sids.pop(sid, None)
+                self._closed_sids.add(sid)
                 self.books.reset_sid(sid)
         cid = self._next_id()
         self._pending[cid] = "orderbook_delta"
@@ -168,6 +176,7 @@ class KalshiWebSocket:
         headers = self.signer.headers("GET", WS_PATH) if self.signer else {}
         self._ws = await self._connect(self.url, headers)
         self.connected = True
+        self.stats["connections"] += 1
         self.stats["connected_since"] = time.time()
         self._emit_status("connected", {"markets": len(self.markets)})
         try:
@@ -196,9 +205,18 @@ class KalshiWebSocket:
         try:
             frame = json.loads(raw)
         except json.JSONDecodeError:
+            self.stats["malformed"] += 1
             log.warning("ws_bad_json", extra={"fields": {"sample": raw[:120]}})
             return
+        if not isinstance(frame, dict):
+            self.stats["malformed"] += 1
+            return
         typ = frame.get("type")
+        if frame.get("sid") in self._closed_sids and typ not in ("subscribed", "unsubscribed", "ok", "error"):
+            self.stats["stale_sid_frames"] = self.stats.get("stale_sid_frames", 0) + 1
+            return  # in-flight frames for a subscription we already closed
+        bt = self.stats["by_type"]
+        bt[typ] = bt.get(typ, 0) + 1
         if typ == "subscribed":
             msg = frame.get("msg") or {}
             ch = msg.get("channel") or self._pending.pop(frame.get("id"), "")
@@ -207,15 +225,27 @@ class KalshiWebSocket:
             return
         if typ == "error":
             self.stats["errors"] += 1
+            self.stats["error_frames"] += 1
             log.warning("ws_error_frame", extra={"fields": {"msg": frame.get("msg")}})
             return
         if typ in ("ok", "unsubscribed"):
             return
         events = parse_frame(frame, recv_ns)
         for ev in events:
+            if ev.kind == "trade" and ev.trade_id:
+                if ev.trade_id in self._seen_trades:
+                    self.stats["duplicates"] += 1
+                    continue
+                self._seen_trades.add(ev.trade_id)
+                self._seen_order.append(ev.trade_id)
+                if len(self._seen_order) > 50_000:
+                    self._seen_trades.discard(self._seen_order.popleft())
             if ev.kind in ("snapshot", "delta"):
-                before = self.books.gaps
+                before, dup_before = self.books.gaps, self.books.duplicates
                 self.books.apply(ev)
+                if self.books.duplicates > dup_before:
+                    self.stats["duplicates"] += 1
+                    continue  # never forward a duplicate to the strategy/recorder consumers
                 if self.books.gaps > before:
                     self.stats["gaps"] += 1
                     self._emit_status("gap", {"sid": ev.sid, "seq": ev.seq})

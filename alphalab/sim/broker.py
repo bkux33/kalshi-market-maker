@@ -83,6 +83,8 @@ class SimOrder:
     cancel_requested_ns: Optional[int] = None
     ts_done: Optional[int] = None
     reason: str = ""
+    ack: Optional[dict] = None          # live: exchange create acknowledgement
+    cancel_ack: Optional[dict] = None   # live: exchange cancel acknowledgement
 
     @property
     def market(self) -> str:

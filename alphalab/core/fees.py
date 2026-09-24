@@ -43,7 +43,8 @@ class FeeSchedule:
         mult = base.multiplier if fee_multiplier is None else float(fee_multiplier)
         if fee_type == "quadratic":
             return replace(base, maker_rate=0.0, multiplier=mult)
-        if fee_type == "quadratic_with_maker_fees":
+        if fee_type in ("quadratic_with_maker_fees", "quadratic_with_combo_maker_fees"):
+            # combo-maker schedules charge makers on (at least) some markets: stay conservative
             return replace(base, maker_rate=MAKER_RATE, multiplier=mult)
         return replace(base, multiplier=mult)
 

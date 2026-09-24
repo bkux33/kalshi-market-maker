@@ -17,10 +17,27 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
-DEMO_REST = "https://demo-api.kalshi.co/trade-api/v2"
-PROD_WS = "wss://api.elections.kalshi.com/trade-api/ws/v2"
-DEMO_WS = "wss://demo-api.kalshi.co/trade-api/ws/v2"
+# Recommended dedicated Trade API hosts (Kalshi "API Environments" docs; official SDK 3.30.0,
+# 2026-09-15). The older shared hosts remain supported and can be selected with
+# ``kalshi.host_profile: legacy`` or overridden entirely via KALSHI_REST_URL / KALSHI_WS_URL.
+PROD_REST = "https://external-api.kalshi.com/trade-api/v2"
+DEMO_REST = "https://external-api.demo.kalshi.co/trade-api/v2"
+PROD_WS = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+DEMO_WS = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
+LEGACY_PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
+LEGACY_DEMO_REST = "https://demo-api.kalshi.co/trade-api/v2"
+LEGACY_PROD_WS = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+LEGACY_DEMO_WS = "wss://demo-api.kalshi.co/trade-api/ws/v2"
+DEMO_HOST_SUFFIXES = (".demo.kalshi.co", "demo-api.kalshi.co")
+
+
+def is_demo_url(url: str) -> bool:
+    """True only for Kalshi DEMO hosts (fake money) or a local mock exchange."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return True
+    return any(host == s.lstrip(".") or host.endswith(s) for s in DEMO_HOST_SUFFIXES)
 
 LIVE_ACK_VALUE = "I_ACCEPT_REAL_MONEY_RISK"
 
@@ -30,18 +47,27 @@ class KalshiConfig:
     env: str = "demo"                     # demo | prod
     api_key_id: Optional[str] = None      # env only: KALSHI_API_KEY_ID
     private_key_path: Optional[str] = None  # env only: KALSHI_PRIVATE_KEY_PATH
-    rest_url: Optional[str] = None
-    ws_url: Optional[str] = None
+    host_profile: str = "external"       # external (recommended) | legacy (shared hosts, still supported)
+    rest_url: Optional[str] = None        # env override: KALSHI_REST_URL
+    ws_url: Optional[str] = None          # env override: KALSHI_WS_URL
     requests_per_second: float = 8.0      # client-side throttle, below Kalshi basic tier
     timeout_s: float = 10.0
 
     @property
     def rest_base(self) -> str:
-        return self.rest_url or (PROD_REST if self.env == "prod" else DEMO_REST)
+        if self.rest_url:
+            return self.rest_url
+        if self.host_profile == "legacy":
+            return LEGACY_PROD_REST if self.env == "prod" else LEGACY_DEMO_REST
+        return PROD_REST if self.env == "prod" else DEMO_REST
 
     @property
     def ws_base(self) -> str:
-        return self.ws_url or (PROD_WS if self.env == "prod" else DEMO_WS)
+        if self.ws_url:
+            return self.ws_url
+        if self.host_profile == "legacy":
+            return LEGACY_PROD_WS if self.env == "prod" else LEGACY_DEMO_WS
+        return PROD_WS if self.env == "prod" else DEMO_WS
 
     @property
     def has_credentials(self) -> bool:
@@ -224,6 +250,16 @@ def load_settings(path: Optional[str] = None, env: Optional[Dict[str, str]] = No
         s.kalshi.env = env["KALSHI_ENV"].strip().lower()
     if s.kalshi.env not in ("demo", "prod"):
         raise ValueError("KALSHI_ENV must be 'demo' or 'prod'")
+    if env.get("KALSHI_REST_URL"):
+        s.kalshi.rest_url = env["KALSHI_REST_URL"]
+    if env.get("KALSHI_WS_URL"):
+        s.kalshi.ws_url = env["KALSHI_WS_URL"]
+    if env.get("KALSHI_HOST_PROFILE"):
+        s.kalshi.host_profile = env["KALSHI_HOST_PROFILE"].strip().lower()
+    if s.kalshi.host_profile not in ("external", "legacy"):
+        raise ValueError("kalshi.host_profile must be 'external' or 'legacy'")
+    if s.kalshi.env == "demo" and not (is_demo_url(s.kalshi.rest_base) and is_demo_url(s.kalshi.ws_base)):
+        raise ValueError("KALSHI_ENV=demo but the REST/WS URL is not a Kalshi demo host; refusing to start")
     s.kalshi.api_key_id = env.get("KALSHI_API_KEY_ID") or None
     s.kalshi.private_key_path = env.get("KALSHI_PRIVATE_KEY_PATH") or None
     if env.get("DATA_DIR"):

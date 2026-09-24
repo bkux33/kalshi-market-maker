@@ -202,12 +202,39 @@ class KalshiREST:
                             params={"ticker": ticker, "min_ts": min_ts, "limit": limit}, auth=True)
         return data.get("fills") or []
 
-    def create_order(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        return self.request("POST", "/portfolio/orders", json_body=body, auth=True).get("order") or {}
+    # ------------------------------------------------------------------ orders (V2)
+    # Current API (official SDK 3.30.0): event-market orders use the V2 shape on
+    # /portfolio/events/orders with a single-book ``side`` (``bid`` buys YES, ``ask``
+    # sells YES), fixed-point dollar ``price`` and fixed-point ``count`` strings.
+    # The legacy POST /portfolio/orders shape is deprecated and not used.
+    def create_order_v2(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("POST", "/portfolio/events/orders", json_body=body, auth=True)
 
-    def cancel_order(self, order_id: str) -> Dict[str, Any]:
-        return self.request("DELETE", f"/portfolio/orders/{order_id}", auth=True)
+    def cancel_order_v2(self, order_id: str, market_ticker: Optional[str] = None,
+                        subaccount: Optional[int] = None) -> Dict[str, Any]:
+        return self.request("DELETE", f"/portfolio/events/orders/{order_id}",
+                            params={"market_ticker": market_ticker, "subaccount": subaccount}, auth=True)
 
-    def batch_cancel(self, order_ids: List[str]) -> Dict[str, Any]:
-        return self.request("DELETE", "/portfolio/orders/batched",
-                            json_body={"orders": [{"order_id": o} for o in order_ids]}, auth=True)
+    def batch_cancel_v2(self, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """``orders``: [{"order_id": ..., "market_ticker": ...}, ...]"""
+        return self.request("DELETE", "/portfolio/events/orders/batched", json_body={"orders": orders}, auth=True)
+
+    def cancel_all_orders_v2(self, subaccount: Optional[int] = None) -> Dict[str, Any]:
+        return self.request("DELETE", "/portfolio/events/orders", params={"subaccount": subaccount}, auth=True)
+
+    def get_order(self, order_id: str) -> Dict[str, Any]:
+        return self.request("GET", f"/portfolio/orders/{order_id}", auth=True).get("order") or {}
+
+    # ------------------------------------------------------------------ series / events (discovery)
+    def get_series_list(self, category: Optional[str] = None, include_volume: bool = True) -> List[Dict[str, Any]]:
+        data = self.request("GET", "/series", params={"category": category,
+                                                       "include_volume": str(include_volume).lower()})
+        return data.get("series") or []
+
+    def iter_events(self, max_pages: int = 20, **params: Any) -> Iterator[Dict[str, Any]]:
+        cursor = None
+        for _ in range(max_pages):
+            events, cursor = self.get_events(cursor=cursor, **params)
+            yield from events
+            if not cursor or not events:
+                return
