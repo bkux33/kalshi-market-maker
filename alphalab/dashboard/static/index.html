@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kalshi Alpha Lab</title>
+<style>
+  :root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff; --line:#e2e2dc; --pos:#127a3a; --neg:#b3261e; --acc:#2b5cab; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141413; --fg:#ecebe6; --muted:#9b9a93; --card:#1f1f1d; --line:#33332f; --pos:#58c27d; --neg:#f2837b; --acc:#8fb0ea; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; flex-wrap:wrap; gap:4px 12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; }
+  header b { margin-right:8px; }
+  nav a { color:var(--muted); text-decoration:none; padding:4px 6px; border-radius:4px; }
+  nav a.on { color:var(--fg); background:var(--line); }
+  main { padding:16px; max-width:1400px; margin:auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; overflow-x:auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; }
+  .kpi small { color:var(--muted); display:block; } .kpi span { font-size:20px; font-variant-numeric:tabular-nums; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { cursor:pointer; color:var(--muted); font-weight:600; user-select:none; }
+  .pos { color:var(--pos); } .neg { color:var(--neg); } .muted { color:var(--muted); }
+  .badge { padding:1px 6px; border-radius:4px; font-size:12px; border:1px solid var(--line); }
+  .REJECT { color:var(--neg); } .PAPER, .LIVE-CANDIDATE { color:var(--pos); } .RESEARCH { color:var(--acc); }
+  button.kill { background:var(--neg); color:#fff; border:0; padding:8px 14px; border-radius:6px; font-weight:700; cursor:pointer; }
+  pre { white-space:pre-wrap; font-size:12px; }
+  .note { color:var(--muted); font-size:12px; }
+  svg { width:100%; height:180px; }
+</style>
+</head>
+<body>
+<header><b>Kalshi Alpha Lab</b><nav id="nav"></nav><span id="ks" class="note"></span></header>
+<main id="app">loading…</main>
+<script>
+const PAGES = ["dashboard","markets","orderbook","strategies","experiments","backtests","paper","risk","trades","performance","settings"];
+const token = new URLSearchParams(location.search).get("token");
+const api = async (p, opt={}) => {
+  const h = token ? {Authorization: "Bearer " + token} : {};
+  const r = await fetch(p, {...opt, headers: {...h, ...(opt.headers||{})}});
+  if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+  return r.json();
+};
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const num = (v, d=2) => v === null || v === undefined ? '<span class="muted">n/a</span>' : (typeof v === "number" ? v.toFixed(d) : esc(v));
+const money = v => v === null || v === undefined ? '<span class="muted">n/a</span>' : `<span class="${v>0?'pos':v<0?'neg':''}">${v<0?'-':''}$${Math.abs(v).toFixed(2)}</span>`;
+const ts = ns => ns ? new Date(ns/1e6).toISOString().replace("T"," ").slice(0,19) : "";
+const page = () => { const p = location.pathname.replace(/^\//, ""); return PAGES.includes(p) ? p : "dashboard"; };
+
+function table(rows, cols, id) {
+  if (!rows || !rows.length) return '<p class="muted">no rows</p>';
+  cols = cols || Object.keys(rows[0]).map(k => [k, k]);
+  const head = cols.map(([k, label]) => `<th data-k="${k}">${esc(label)}</th>`).join("");
+  const body = rows.map(r => "<tr>" + cols.map(([k,, f]) => `<td>${f ? f(r[k], r) : (typeof r[k] === "object" && r[k] !== null ? esc(JSON.stringify(r[k])) : num(r[k], 4))}</td>`).join("") + "</tr>").join("");
+  return `<table id="${id||''}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+function sortable(root, rows, cols, render) {
+  root.querySelectorAll("th").forEach(th => th.onclick = () => {
+    const k = th.dataset.k; const dir = th.dataset.dir === "asc" ? -1 : 1;
+    rows.sort((a, b) => ((a[k] ?? -Infinity) > (b[k] ?? -Infinity) ? 1 : -1) * dir);
+    render(); const nth = root.querySelector(`th[data-k="${k}"]`); if (nth) nth.dataset.dir = dir === 1 ? "asc" : "desc";
+  });
+}
+function chart(points, key) {
+  if (!points || points.length < 2) return '<p class="muted">not enough points</p>';
+  const xs = points.map(p => p.ts_ns), ys = points.map(p => p[key]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(0, ...ys), y1 = Math.max(0, ...ys);
+  const X = x => 10 + (x - x0) / ((x1 - x0) || 1) * 980, Y = y => 170 - (y - y0) / ((y1 - y0) || 1) * 160;
+  const d = points.map((p, i) => `${i?'L':'M'}${X(p.ts_ns).toFixed(1)},${Y(p[key]).toFixed(1)}`).join("");
+  return `<svg viewBox="0 0 1000 180" preserveAspectRatio="none"><line x1="10" x2="990" y1="${Y(0)}" y2="${Y(0)}" stroke="currentColor" opacity=".2"/><path d="${d}" fill="none" stroke="var(--acc)" stroke-width="2"/></svg><div class="note">${key}: min ${y0.toFixed(2)} max ${y1.toFixed(2)}</div>`;
+}
+const kpis = items => '<div class="grid">' + items.map(([l, v]) => `<div class="kpi"><small>${esc(l)}</small><span>${v}</span></div>`).join("") + "</div>";
+
+const R = {};
+R.dashboard = async el => {
+  const o = await api("/api/overview");
+  let h = `<div class="card note">${esc(o.disclaimer)}</div>`;
+  h += `<div class="card">${kpis([["Trading mode", esc(o.trading_mode)], ["Kill switch", o.kill_switch ? '<span class="neg">TRIPPED</span>' : '<span class="pos">armed (not tripped)</span>'],
+        ["Markets recorded", num(o.data?.markets, 0)], ["Book events", num(o.data?.book_events, 0)], ["Trades", num(o.data?.trades, 0)], ["Experiments", num(o.data?.experiments, 0)]])}
+        <p><button class="kill" onclick="killSwitch()">EMERGENCY KILL SWITCH</button> <span class="note">cancels all orders and halts every session; reset is CLI-only</span></p></div>`;
+  for (const m of ["paper", "live"]) {
+    const s = o[m]; if (!s) { h += `<div class="card muted">no ${m} session running</div>`; continue; }
+    h += `<div class="card"><b>${m.toUpperCase()} session</b> <span class="note">${esc(s.run_id)} · updated ${num(s.age_s,1)}s ago</span>${kpis([
+      ["Equity (net)", money(s.pnl?.equity)], ["Realized", money(s.pnl?.realized)], ["Unrealized", money(s.pnl?.unrealized)], ["Fees", money(s.pnl?.fees)],
+      ["Fills", num(s.metrics?.n_fills, 0)], ["Max drawdown", money(s.metrics?.max_drawdown)], ["Positions", num(s.n_positions,0)], ["Open orders", num(s.n_open_orders,0)],
+      ["Daily P&L", money(s.risk?.daily_pnl)], ["Halted", s.risk?.halted ? '<span class="neg">'+esc(s.risk.halt_reason)+'</span>' : "no"]])}</div>`;
+  }
+  h += `<div class="card"><b>Experiment status counts</b>${table(o.status_counts || [])}</div>`;
+  el.innerHTML = h;
+};
+R.markets = async el => {
+  const rows = await api("/api/markets");
+  const cols = [["ticker","market"],["status","status"],["bid","bid",v=>num(v/100,1)],["ask","ask",v=>num(v/100,1)],["spread","spread (c)",v=>num(v/100,1)],
+    ["imbalance5","imbalance",v=>num(v,3)],["bid_depth5","bid depth",v=>num(v,0)],["ask_depth5","ask depth",v=>num(v,0)],["close_ts","close",v=>v?new Date(v*1000).toISOString().slice(0,16):""],
+    ["result","result",v=>esc(v)],["depth_quality","depth",v=>esc(v)],["source","source",v=>esc(v)]];
+  const draw = () => { el.innerHTML = `<div class="card"><b>Markets</b> <span class="note">last recorded top of book (prices in cents)</span>${table(rows, cols)}</div>`; sortable(el, rows, cols, draw); };
+  draw();
+};
+R.orderbook = async el => {
+  const mk = new URLSearchParams(location.search).get("market") || "";
+  el.innerHTML = `<div class="card">Market: <input id="mk" value="${esc(mk)}" size="40"> <button id="go">show</button><div id="ob"></div></div>`;
+  const show = async () => {
+    const m = document.getElementById("mk").value.trim(); if (!m) return;
+    try {
+      const b = await api("/api/orderbook/" + encodeURIComponent(m));
+      if (b.bids) {
+        const rows = []; for (let i = 0; i < Math.max(b.bids.length, b.asks.length); i++) rows.push({bid_qty: b.bids[i]?.[1], bid: b.bids[i]?.[0], ask: b.asks[i]?.[0], ask_qty: b.asks[i]?.[1]});
+        document.getElementById("ob").innerHTML = `<p class="note">${esc(b.source)} · mid ${num(b.mid,4)} · spread ${num(b.spread,4)} · imbalance ${num(b.imbalance,3)} · microprice ${num(b.microprice,4)}</p>` + table(rows, [["bid_qty","bid qty",v=>num(v,0)],["bid","bid $",v=>num(v,4)],["ask","ask $",v=>num(v,4)],["ask_qty","ask qty",v=>num(v,0)]]);
+      } else {
+        document.getElementById("ob").innerHTML = `<p class="note">${esc(b.source)}</p>` + chart(b.history.slice().reverse().map(r => ({ts_ns:r.ts_ns, mid:r.mid/100})), "mid") + table(b.history.slice(0,50), [["ts_ns","time",ts],["bid","bid",v=>num(v/100,1)],["ask","ask",v=>num(v/100,1)],["bid_qty","bid qty",v=>num(v,0)],["ask_qty","ask qty",v=>num(v,0)],["imbalance5","imbalance",v=>num(v,3)]]);
+      }
+    } catch (e) { document.getElementById("ob").innerHTML = `<p class="neg">${esc(e.message)}</p>`; }
+  };
+  document.getElementById("go").onclick = show; if (mk) show();
+};
+R.strategies = async el => {
+  const s = await api("/api/strategies");
+  el.innerHTML = `<div class="card"><b>Validation status by exact parameter set</b><p class="note">Status is assigned by objective rules (see RISK.md / BACKTESTING.md). LIVE-CANDIDATE is only reachable through paper trading.</p>${table(s.status, [["strategy","strategy"],["status","status",v=>`<span class="badge ${v}">${esc(v)}</span>`],["params","params",v=>esc(v)],["reason","reason",v=>esc(v)],["experiment_id","experiment",v=>esc(v)]])}</div>
+   <div class="card"><b>Registered strategies</b>${table(s.registry, [["name","name",v=>esc(v)],["family","family",v=>esc(v)],["tunable","tuned params",v=>esc(v.join(", "))],["defaults","defaults",v=>`<code>${esc(JSON.stringify(v))}</code>`]])}</div>`;
+};
+R.experiments = async el => {
+  const rows = await api("/api/experiments");
+  const cols = [["name","experiment",(v,r)=>`<a href="#" onclick="showExp('${r.experiment_id}');return false">${esc(v)}</a>`],["strategy","strategy",esc],["status","status",v=>`<span class="badge ${v}">${esc(v)}</span>`],
+    ["oos_trades","OOS trades",v=>num(v,0)],["oos_net","OOS net",money],["oos_expectancy","OOS expectancy",v=>num(v,4)],["is_expectancy","IS expectancy",v=>num(v,4)],["oos_sharpe_trade","OOS Sharpe/trade",v=>num(v,3)],
+    ["oos_max_dd","OOS max DD",money],["oos_fees","OOS fees",money],["holdout_net","holdout net",money],["grid_points","grid pts",v=>num(v,0)],["gating_flags","gating flags",v=>esc((v||[]).join(", "))]];
+  const draw = () => { el.innerHTML = `<div class="card"><b>Experiments</b><p class="note">Objective validation results, sortable by any column. Sorting is not a ranking of future performance; OOS = walk-forward out-of-sample.</p>${table(rows, cols)}</div><div class="card" id="exp"></div>`; sortable(el, rows, cols, draw); };
+  draw();
+};
+window.showExp = async id => { const e = await api("/api/experiments/" + id); document.getElementById("exp").innerHTML = `<pre>${esc(e.scorecard)}</pre>`; };
+R.backtests = async el => {
+  const rows = await api("/api/runs");
+  const cols = [["run_id","run",(v,r)=>`<a href="#" onclick="showRun('${v}');return false">${esc(v)}</a>`],["kind","kind",esc],["phase","phase",esc],["strategy","strategy",esc],["n_trades","trades",v=>num(v,0)],
+    ["gross_pnl","gross",money],["fees","fees",money],["net_pnl","net",money],["expectancy","expectancy",v=>num(v,4)],["max_drawdown","max DD",money],["fill_rate","fill rate",v=>num(v,3)],["adverse_selection_c","adverse sel. (c)",v=>num(v,2)],["created_ns","created",ts]];
+  const draw = () => { el.innerHTML = `<div class="card"><b>Runs</b> <span class="note">backtest / experiment / paper runs</span>${table(rows, cols)}</div><div class="card" id="run"></div>`; sortable(el, rows, cols, draw); };
+  draw();
+};
+window.showRun = async id => { const p = await api(`/api/runs/${id}/pnl`); document.getElementById("run").innerHTML = `<b>${esc(id)} equity (net of fees)</b>` + chart(p, "equity"); };
+R.paper = async el => {
+  const s = await api("/api/state/paper");
+  if (s.error) { el.innerHTML = `<div class="card muted">${esc(s.error)}. Start one with <code>alphalab paper --strategy …</code></div>`; return; }
+  el.innerHTML = `<div class="card"><b>Paper session ${esc(s.run_id)}</b> <span class="note">simulated fills on live data · updated ${num(s.age_s,1)}s ago</span>${kpis([["Equity", money(s.pnl.equity)],["Fees", money(s.pnl.fees)],["Fills", num(s.metrics.n_fills,0)],["Fill rate", num(s.metrics.fill_rate,3)],["Adverse sel. (c)", num(s.metrics.adverse_selection_c,2)]])}${chart(s.pnl.curve, "equity")}</div>
+    <div class="card"><b>Positions</b>${table(s.positions)}</div><div class="card"><b>Open orders</b>${table(s.open_orders, [["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],["status","status",esc],["tag","tag",esc]])}</div>
+    <div class="card"><b>Recent signals</b>${table((s.recent.signals||[]).slice(-50).reverse(), [["ts_ns","time",ts],["strategy","strategy",esc],["market","market",esc],["name","signal",esc],["value","value",v=>num(v,4)]])}</div>
+    <div class="card"><b>Recent fills</b>${table((s.recent.fills||[]).slice(-50).reverse(), [["ts_ns","time",ts],["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],["liquidity","liq",esc],["fee","fee",money]])}</div>`;
+};
+R.risk = async el => {
+  const r = await api("/api/risk");
+  el.innerHTML = `<div class="card"><b>Kill switch</b>: ${r.kill_switch ? '<span class="neg">TRIPPED '+esc(JSON.stringify(r.kill_switch))+'</span>' : '<span class="pos">not tripped</span>'} <span class="note">(${esc(r.kill_switch_file)})</span>
+    <p><button class="kill" onclick="killSwitch()">EMERGENCY KILL SWITCH</button></p></div>
+    <div class="card"><b>Session risk state</b><pre>${esc(JSON.stringify(r.sessions, null, 2))}</pre></div>
+    <div class="card"><b>Configured limits</b><pre>${esc(JSON.stringify(r.limits, null, 2))}</pre></div>
+    <div class="card"><b>Risk events</b>${table(r.events, [["ts_ns","time",ts],["mode","mode",esc],["type","type",esc],["severity","severity",esc],["detail","detail",v=>`<code>${esc(String(v).slice(0,200))}</code>`]])}</div>`;
+};
+R.trades = async el => {
+  const run = new URLSearchParams(location.search).get("run_id");
+  const rows = await api("/api/trades" + (run ? "?run_id=" + encodeURIComponent(run) : ""));
+  const cols = [["ts_ns","time",ts],["run_id","run",esc],["mode","mode",esc],["strategy","strategy",esc],["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],
+    ["liquidity","liq",esc],["fee","fee",money],["slippage_usd","vs mid $",v=>num(v,4)],["markout_30s","markout 30s $",v=>num(v,4)]];
+  const draw = () => { el.innerHTML = `<div class="card"><b>Fills</b> <span class="note">newest first (max 500); add ?run_id=… to filter</span>${table(rows, cols)}</div>`; sortable(el, rows, cols, draw); };
+  draw();
+};
+R.performance = async el => {
+  const p = await api("/api/performance");
+  el.innerHTML = `<div class="card"><b>Performance by evidence type</b><p class="note">${esc(p.note)}</p>${table(p.rows, [["kind","evidence",esc],["strategy","strategy",esc],["runs","runs",v=>num(v,0)],["trades","trades",v=>num(v,0)],["net_pnl","net",money],["fees","fees",money]])}</div>`;
+  try { const f = await api("/api/predictive"); el.innerHTML += `<div class="card"><b>Latest predictive-feature study</b>${table(f, [["feature","feature",esc],["horizon_s","horizon s",v=>num(v,0)],["split","split",esc],["n","n",v=>num(v,0)],["ic","IC",v=>num(v,3)],["ic_tstat","t",v=>num(v,2)],["cost_hurdle","hurdle c",v=>num(v,2)],["net_edge_top","net edge top c",v=>num(v,2)],["net_edge_bottom","net edge bottom c",v=>num(v,2)]])}</div>`; } catch (e) {}
+};
+R.settings = async el => { const s = await api("/api/settings"); el.innerHTML = `<div class="card"><b>Effective settings</b> <span class="note">secrets redacted; edit the YAML/env and restart</span><pre>${esc(JSON.stringify(s, null, 2))}</pre></div>`; };
+
+window.killSwitch = async () => {
+  if (!confirm("Trip the kill switch? All sessions cancel orders and halt. Reset requires the CLI.")) return;
+  const reason = prompt("Reason", "manual (dashboard)") || "dashboard";
+  const r = await api("/api/kill", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({reason})});
+  alert("Kill switch tripped: " + JSON.stringify(r.info)); render();
+};
+async function render() {
+  const p = page();
+  document.getElementById("nav").innerHTML = PAGES.map(x => `<a href="/${x}${token ? '?token=' + token : ''}" class="${x===p?'on':''}">${x}</a>`).join("");
+  const el = document.getElementById("app");
+  try { await R[p](el); } catch (e) { el.innerHTML = `<div class="card neg">${esc(e.message)}</div>`; }
+  try { const o = await api("/api/overview"); document.getElementById("ks").innerHTML = o.kill_switch ? '<span class="neg">KILL SWITCH TRIPPED</span>' : ""; } catch (e) {}
+}
+render();
+if (["dashboard", "paper", "risk"].includes(page())) setInterval(render, 3000);
+</script>
+</body>
+</html>

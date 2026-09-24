@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalshi-alpha-lab"
+version = "0.1.0"
+description = "Research-first framework for testing whether Kalshi strategies have a net edge after costs"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = [
+  "duckdb>=1.1",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "httpx>=0.27",
+  "websockets>=13",
+  "cryptography>=42",
+  "pyyaml>=6",
+  "python-dotenv>=1.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.60"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+alphalab = "alphalab.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["alphalab*"]
+
+[tool.setuptools.package-data]
+alphalab = ["dashboard/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

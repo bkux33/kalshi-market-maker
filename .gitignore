@@ -68,3 +68,16 @@ logs/
 config/credentials.yaml
 *.db
 *.sqlite
+
+# Kalshi Alpha Lab runtime data (never commit market data, journals, keys or state)
+.venv/
+data/
+reports/
+*.duckdb
+*.duckdb.wal
+KILL_SWITCH
+*.jsonl
+*.jsonl.open
+*.jsonl.active
+.env.*
+!.env.example
