@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -94,7 +95,7 @@ def test_feature_study_finds_planted_imbalance_signal(db):
     write_synthetic(db, SyntheticSpec(n_markets=8, imbalance_signal=0.9, lead_steps=20, seed=2))
     ds = predictive.build_dataset(db, horizons=(5, 10))
     assert {"fwd_5s", "fwd_10s", "fwd_settle", "imbalance"}.issubset(ds.columns)
-    res = predictive.feature_study(db, ds, features=("imbalance", "ret_5s"), horizons=(5, 10))
+    res = predictive.feature_study(db, ds, features=("imbalance", "ret_5s", "spread"), horizons=(5, 10))
     row = res[(res.feature == "imbalance") & (res.horizon_s == 10) & (res.split == "confirmation")].iloc[0]
     assert row.ic > 0.1 and row.ic_tstat > 2 and row.cost_hurdle > 0
     assert int(db.query_df("SELECT COUNT(*) n FROM predictive_results")["n"].iloc[0]) == len(res)
@@ -105,3 +106,14 @@ def test_incremental_information_needs_enough_markets(db):
     ds = predictive.build_dataset(db, horizons=(5,))
     out = predictive.incremental_information(ds, ["strike_z"])
     assert out["ok"] is False
+
+
+def test_research_loop_end_to_end(db, settings, tmp_path):
+    from alphalab.research.loop import run_research_loop
+    write_synthetic(db, SyntheticSpec(n_markets=12, seed=31))
+    out = run_research_loop(db, settings, strategies=["imbalance", "logical_arb"], out_dir=str(tmp_path),
+                            random_trials=5)
+    assert out["data_groups"] == {"synthetic": 12}
+    assert out["experiments"]["imbalance@synthetic"]["classification"] in ("REJECT", "RESEARCH")
+    assert "skipped" in out["experiments"]["logical_arb@synthetic"]
+    assert out["paper_candidates"] == [] and Path(out["report"]).exists()

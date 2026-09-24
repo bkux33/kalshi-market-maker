@@ -117,7 +117,8 @@ def _non_overlapping(g: pd.DataFrame, horizon_s: float) -> pd.DataFrame:
 
 
 def evaluate(df: pd.DataFrame, feature: str, target: str, horizon_s: float, taker_rate: float = 0.07) -> Dict[str, Any]:
-    d = df[[feature, target, "spread", "mid", "ts_ns", "market"]].dropna()
+    cols = list(dict.fromkeys([feature, target, "spread", "mid", "ts_ns", "market"]))
+    d = df[cols].dropna()
     if d.empty:
         return {"n": 0}
     d = pd.concat([_non_overlapping(g, horizon_s) for _, g in d.groupby("market", sort=True)])

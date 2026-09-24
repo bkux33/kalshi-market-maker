@@ -79,6 +79,9 @@ def test_csv_importers(db, tmp_path):
     base.to_csv(p, index=False)
     out = import_baseline_csv(db, p)
     assert out["markets"] == 1 and out["events"] >= 3
+    ts = db.query_df("SELECT MIN(ts_ns) lo FROM book_events")["lo"].iloc[0]
+    assert ts == 1772480772400000000  # 2026-03-02 14:46:12.4-05:00 in epoch *nanoseconds*
+    assert db.query_df("SELECT MIN(ts_ns) lo FROM external_prices")["lo"].iloc[0] == 1772480772500000000
     t = db.query_df("SELECT bid, ask, bid_qty, ask_qty FROM tob").iloc[0].tolist()
     assert t == [4600, 4800, 6.0, 5.0]
     assert db.query_df("SELECT inferred FROM settlements")["inferred"].iloc[0]
