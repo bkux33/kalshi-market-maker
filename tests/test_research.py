@@ -79,6 +79,14 @@ def test_null_data_is_rejected_end_to_end(db, tmp_path):
     st = db.query_df("SELECT status FROM strategy_status")["status"].tolist()
     assert st == ["REJECT"]
     assert research_report(db, tmp_path).exists()
+    from alphalab.research import analysis
+    base = analysis.rerun_oos(db, rep.experiment_id)
+    assert base["net_pnl"] == pytest.approx(rep.oos_metrics["net_pnl"])  # reproduces the walk-forward OOS path
+    stressed = analysis.rerun_oos(db, rep.experiment_id, fee_stress=2.0, extra_latency_ms=100)
+    assert stressed["fees"] >= base["fees"]
+    assert rep.stress["fees_x2"]["fees"] == pytest.approx(2 * rep.oos_metrics["fees"], rel=1e-6)
+    conc = analysis.concentration(db, rep.experiment_id)
+    assert conc["n_trades"] == rep.oos_metrics["n_trades"]
 
 
 def test_planted_edge_is_detected_but_not_promoted(db):

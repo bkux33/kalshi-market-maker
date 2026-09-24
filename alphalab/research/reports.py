@@ -147,6 +147,7 @@ def research_report(db: Database, out_dir: str | Path = "reports", title: str = 
                                net_edge_top, net_edge_bottom FROM predictive_results
                         WHERE study_id = (SELECT study_id FROM predictive_results ORDER BY created_ns DESC LIMIT 1)
                         ORDER BY feature, horizon_s, split""")
+    pr = pr[pr["ic"].notna()] if not pr.empty else pr
     if not pr.empty:
         lines += ["## Latest predictive-feature study", "",
                   "IC = Spearman rank correlation between the feature and the forward mid move, computed on "

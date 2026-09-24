@@ -103,10 +103,12 @@ def rerun_oos(db: Database, experiment_id: str, fee_stress: float = 1.0, extra_s
     if maker_fee_rate is not None:
         fees = replace(fees, maker_rate=maker_fee_rate)
     cls = get_strategy(e["strategy"])
-    params = e["selected_params"]
     blocks = (e["summary"] or {}).get("blocks") or []
     results = []
-    for b in blocks[1:]:
+    # walk-forward path: each fold's own parameters on its own out-of-sample block
+    for w in (e["summary"] or {}).get("wf_folds") or []:
+        b = blocks[w["test_block"]]
+        params = w["params"]
         rs = ReplaySpec(markets=b["markets"], start_ns=b.get("start_ns"), end_ns=b.get("end_ns"))
         cfg = BacktestConfig(replay=rs, fill=fill, fees=fees, fee_stress=fee_stress, risk=research_risk_config())
         results.append(run_backtest(db, lambda: cls(**params), cfg, persist=False))

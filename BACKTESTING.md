@@ -58,11 +58,13 @@ top-market and top-day share of profits, open positions at the end.
    engine refuses larger searches.
 3. **Walk-forward:** for fold k, choose parameters on blocks < k only, evaluate on block k.
    The concatenated folds are the **out-of-sample (OOS)** record; the last fold is the validation set.
-4. **Final parameters** (chosen on all development blocks except the last) are stressed on the OOS
-   blocks: 2× fees, +1 tick taker slippage, +250 ms latency, conservative queue model.
-5. **Sensitivity:** neighbouring grid points on the validation block.
-6. **Random benchmark:** random direction at the same entry times (taker strategies), ≥ 200 trials
-   by default; fewer trials than needed to resolve p < 0.05 raise `benchmark_underpowered`.
+4. **Stress** is applied to the same walk-forward path (each fold's own parameters on its own OOS
+   block): 2× fees, +1 tick taker slippage, +250 ms latency, conservative queue model. Stressing
+   the final parameters on earlier blocks would be partly in-sample, so it is not done.
+5. **Sensitivity:** the final parameters (chosen on all development blocks except the last) and
+   their neighbouring grid points, on the last (validation) block.
+6. **Random benchmark:** random direction at each fold's own entry times (taker strategies), ≥ 200
+   trials by default; fewer trials than needed to resolve p < 0.05 raise `benchmark_underpowered`.
 7. **Deflated/probabilistic Sharpe:** PSR of OOS per-trade returns versus the expected maximum Sharpe
    of the number of grid points tried.
 8. **Classification** (below). The **holdout** is evaluated only if every other gate passed, at most

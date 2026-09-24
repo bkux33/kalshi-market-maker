@@ -66,6 +66,12 @@ def _applicable(db: Database, strategy: str, markets: List[str]) -> Optional[str
                                 AND EXISTS (SELECT 1 FROM external_prices e WHERE e.symbol = m.underlying)""",
                             markets)["n"].iloc[0])
         return None if n > 0 else "no markets with strike + external reference price"
+    if strategy in ("imbalance", "market_maker"):
+        n_full = int(db.query_df(f"""SELECT COUNT(*) n FROM markets WHERE ticker IN ({ph})
+                                     AND COALESCE(depth_quality, 'full') IN ('full', 'synthetic')""",
+                                 markets)["n"].iloc[0])
+        if n_full == 0:
+            return "depth sizes not recorded in this data (assumed), so imbalance/queue dynamics are untestable"
     if strategy == "logical_arb":
         n = int(db.query_df(f"""SELECT COUNT(*) n FROM (SELECT event_ticker FROM markets WHERE ticker IN ({ph})
                                 AND event_ticker IS NOT NULL GROUP BY 1 HAVING COUNT(*) >= 2

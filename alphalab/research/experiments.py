@@ -320,8 +320,7 @@ def run_experiment(db: Database, spec: ExperimentSpec, persist: bool = True,
     val_m = val_res.metrics
     say(f"  walk-forward OOS: trades={oos.get('n_trades')} net={oos.get('net_pnl'):.2f}")
 
-    # --- stress on the OOS blocks with the final parameters
-    oos_blocks = [blocks[k] for k in range(1, len(blocks))]
+    # --- stress on the walk-forward OOS path (each fold's own parameters on its own OOS block)
     stress_defs = {
         "fees_x2": dict(fee_stress=cfg.stress_fee_multiplier),
         "slippage_plus_1tick": dict(fill=replace(spec.fill, taker_slippage_ticks=spec.fill.taker_slippage_ticks
@@ -331,10 +330,9 @@ def run_experiment(db: Database, spec: ExperimentSpec, persist: bool = True,
                                                 cancel_latency_ms=spec.fill.cancel_latency_ms + cfg.stress_latency_ms)),
         "conservative_queue": dict(fill=replace(spec.fill, queue_cancel_model="back", allow_touch_fill=False)),
     }
-    base_sel_oos = aggregate([grid_res[(_pkey(selected), k)] for k in range(1, len(blocks))])
     stress: Dict[str, Optional[Dict[str, Any]]] = {}
     for name, kw in stress_defs.items():
-        stress[name] = _summary(aggregate([bt(selected, b, **kw) for b in oos_blocks]))
+        stress[name] = _summary(aggregate([bt(w["params"], blocks[w["test_block"]], **kw) for w in wf]))
     # --- sensitivity on the validation block
     neigh = _neighbors(selected, spec.grid)
     sensitivity = None
@@ -349,25 +347,29 @@ def run_experiment(db: Database, spec: ExperimentSpec, persist: bool = True,
     pvalue = None
     if issubclass(cls, TakerHorizonStrategy) and cls.name != "random_entry":
         trials = spec.random_trials if spec.random_trials is not None else cfg.random_benchmark_trials
-        entry_times = []
-        for r in wf_results:
-            if not r.orders.empty:
-                e = r.orders[(r.orders["tag"] == "entry") & (r.orders["filled_qty"] > 0)]
-                entry_times += [[m, int(ts)] for m, ts in zip(e["market"], e["ts_decision"])]
-        if entry_times and trials > 0:
-            common = {k: selected[k] for k in TakerHorizonStrategy.common_params() if k in selected}
+        fold_entries = []
+        for w, r in zip(wf, wf_results):
+            e = r.orders[(r.orders["tag"] == "entry") & (r.orders["filled_qty"] > 0)] if not r.orders.empty else r.orders
+            times = [[m, int(ts)] for m, ts in zip(e["market"], e["ts_decision"])] if not e.empty else []
+            common = {k: w["params"][k] for k in TakerHorizonStrategy.common_params() if k in w["params"]}
             common["cooldown_s"] = 0.0
+            fold_entries.append((blocks[w["test_block"]], common, times))
+        n_entries = sum(len(t) for _, _, t in fold_entries)
+        if n_entries and trials > 0:
             strat_net = oos.get("net_pnl") or 0.0
             nets = []
             for seed in range(trials):
-                res = [bt({**common, "entry_times": [x for x in entry_times if x[0] in set(b.markets)], "seed": seed},
-                          b, strategy_name="random_entry") for b in oos_blocks]
-                nets.append(sum(r.metrics.get("net_pnl") or 0.0 for r in res))
+                total = 0.0
+                for block, common, times in fold_entries:
+                    if times:
+                        total += bt({**common, "entry_times": times, "seed": seed}, block,
+                                    strategy_name="random_entry").metrics.get("net_pnl") or 0.0
+                nets.append(total)
             ge = sum(1 for x in nets if x >= strat_net)
             pvalue = (1 + ge) / (1 + len(nets))
             random_bench = {"trials": len(nets), "strategy_net": strat_net, "random_mean_net": sum(nets) / len(nets),
                             "random_p95_net": sorted(nets)[int(0.95 * (len(nets) - 1))], "pvalue": pvalue,
-                            "n_entries": len(entry_times)}
+                            "n_entries": n_entries}
             say(f"  random benchmark: p={pvalue:.3f}")
     # --- probabilistic Sharpe deflated by the number of trials
     oos_trade_nets = [t.net for r in wf_results for t in (r.trips.itertuples() if not r.trips.empty else [])]
@@ -416,7 +418,7 @@ def persist_experiment(db: Database, rep: ExperimentReport, grid_res: Dict[Tuple
         "test": rep.test_metrics, "wf_folds": rep.wf_folds, "stress": rep.stress, "sensitivity": rep.sensitivity,
         "random_benchmark": rep.random_benchmark, "psr": rep.psr, "data_quality": rep.data_quality,
         "blocks": [{"name": b.name, "n_markets": len(b.markets), "start_ns": b.start_ns, "end_ns": b.end_ns,
-                    "markets": b.markets[:200]} for b in rep.blocks],
+                    "markets": b.markets} for b in rep.blocks],
         "test_block": None if rep.test_block is None else {"n_markets": len(rep.test_block.markets),
                                                           "start_ns": rep.test_block.start_ns,
                                                           "end_ns": rep.test_block.end_ns},
