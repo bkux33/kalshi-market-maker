@@ -17,10 +17,13 @@ alphalab experiment --strategy imbalance --grid '{"threshold":[0.6,0.7]}'
 alphalab dashboard              # http://127.0.0.1:8080
 ```
 
-## 2. Collect data and research
+## 2. Connect to DEMO, collect data and research
 ```bash
-alphalab discover --series KXBTC15M KXETH15M          # public REST, no key needed
-alphalab record --series KXBTC15M KXETH15M --external # needs API key (Kalshi WS requires auth)
+alphalab markets --active --search btc --sort volume  # public REST, no key needed; nothing hard-coded
+alphalab demo-check --n 3 --seconds 120               # DEMO only: auth, WS, book rebuild, REST cross-check
+alphalab record --search BTC --max-markets 10 --duration 3600 --external   # needs API key (WS auth)
+alphalab data-quality --out DATA_QUALITY_REPORT.md    # gaps, duplicates, reconnects, timestamps, validity
+alphalab demo-orders --confirm-demo [--attempt-fill]  # DEMO-only order path test (fake money)
 alphalab ingest                                       # load closed hourly tape files into DuckDB
 alphalab features                                     # predictive-feature study
 alphalab research-loop                                # all strategy families + report in reports/
