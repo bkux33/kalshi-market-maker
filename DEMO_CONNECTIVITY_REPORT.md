@@ -52,10 +52,23 @@ headers on the upgrade request signing `GET /trade-api/ws/v2`; subscribe
 | DEMO order path (`alphalab demo-orders`) | **not run** | pass: create+ack, local duplicate block, exchange duplicate `client_order_id` rejection (409), reconnect with resting order, cancel+ack, stale-price block, kill switch, fill, partial fill (2 of 3) |
 | Live trading | refused (unchanged gates) | refused |
 
+## Network pre-flight (`alphalab net-check`, 2026-09-24, run once, no retries)
+```
+Environment: DEMO  TRADING_MODE=paper
+REST external-api.demo.kalshi.co        DNS: resolves  -> BLOCKED_BY_PROXY (403 Forbidden)
+WS   external-api-ws.demo.kalshi.co     DNS: resolves  -> BLOCKED_BY_PROXY (InvalidProxyStatus: proxy rejected connection: HTTP 403)
+NETWORK: BLOCKED: external-api.demo.kalshi.co, external-api-ws.demo.kalshi.co
+```
+Both names resolve; the environment's egress proxy refuses the `CONNECT` tunnel to each. Verification
+steps 1–7 (REST connectivity, authenticated discovery, WS auth, subscription, snapshots, book
+reconstruction, REST/WS top-of-book consistency) could therefore not run.
+
 ## Known remaining API issues / unverified items
 1. **Nothing has been verified against the real exchange.** First real run must be `alphalab demo-check`.
-2. WebSocket host `external-api-ws.demo.kalshi.co` comes from docs snippets and third-party guides; if it
-   fails, use `KALSHI_HOST_PROFILE=legacy` (`wss://demo-api.kalshi.co/trade-api/ws/v2`).
+2. The project owner designated `https://external-api.demo.kalshi.co/trade-api/v2` and
+   `wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2` as the authoritative DEMO endpoints (pinned in
+   config defaults, `.env.example`, `config/alphalab.example.yaml`, `docker-compose.yml`, and by tests).
+   The legacy host (`KALSHI_HOST_PROFILE=legacy`) is only for a specific compatibility problem.
 3. `get_snapshot` (added 2026-04-20) is not used; resync uses unsubscribe + resubscribe, which is
    documented and works, but costs a round trip. Exact `get_snapshot` command syntax was not verifiable.
 4. The `fill` / `user_orders` payload fields are taken from the April 2026 AsyncAPI spec; the V2 era may
@@ -67,8 +80,8 @@ headers on the upgrade request signing `GET /trade-api/ws/v2`; subscribe
 6. Rate limits: the client throttles to 8 requests/s by default; the account's actual tier is unknown.
 
 ## How to complete this stage
-1. In the environment settings: allow network access to `external-api.demo.kalshi.co`,
-   `external-api-ws.demo.kalshi.co` (and `demo-api.kalshi.co` as fallback); add `KALSHI_API_KEY_ID` and a
+1. In the environment settings: allow network access to `external-api.demo.kalshi.co` and
+   `external-api-ws.demo.kalshi.co`, then confirm with `alphalab net-check`; add `KALSHI_API_KEY_ID` and a
    way to provide the key file at `KALSHI_PRIVATE_KEY_PATH` (e.g. a setup script writing it from a secret,
    `chmod 600`). Use a **new** DEMO key.
 2. `alphalab markets --active --limit 30`

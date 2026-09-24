@@ -77,6 +77,15 @@ def cmd_markets(a, s: Settings) -> None:
         print(_market_row(m))
 
 
+def cmd_net_check(a, s: Settings) -> None:
+    from alphalab.kalshi.netcheck import format_netcheck, run_netcheck
+    r = run_netcheck(s.kalshi.rest_base, s.kalshi.ws_base)
+    print(f"Environment: {s.kalshi.env.upper()}  TRADING_MODE={s.trading_mode}")
+    print(format_netcheck(r))
+    if not r["ok"]:
+        sys.exit(2)
+
+
 def cmd_demo_check(a, s: Settings) -> None:
     from alphalab.core.config import is_demo_url
     from alphalab.data.tape import TapeWriter
@@ -398,6 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=50)
     sp.add_argument("--max-pages", type=int, default=10)
     sp.add_argument("--json", action="store_true")
+    add("net-check", cmd_net_check, "credential-free reachability check of the configured REST/WS hosts")
     sp = add("demo-check", cmd_demo_check, "DEMO market-data health check: auth, WS, book rebuild (no orders)")
     sp.add_argument("--markets", nargs="*")
     sp.add_argument("--series", nargs="*")

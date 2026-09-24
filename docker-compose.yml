@@ -5,6 +5,10 @@ x-common: &common
   env_file: .env
   environment:
     DATA_DIR: /data
+    KALSHI_ENV: demo
+    TRADING_MODE: paper
+    KALSHI_REST_URL: https://external-api.demo.kalshi.co/trade-api/v2
+    KALSHI_WS_URL: wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2
     KALSHI_PRIVATE_KEY_PATH: /run/secrets/kalshi_key
   volumes:
     - ./data:/data
@@ -14,7 +18,7 @@ x-common: &common
 services:
   recorder:            # raw market data -> append-only tape
     <<: *common
-    command: ["alphalab", "record", "--series", "KXBTC15M", "KXETH15M", "--external"]
+    command: ["alphalab", "record", "--search", "BTC", "--max-markets", "10", "--external"]
 
   ingester:            # periodically loads closed tape files/journals into DuckDB (sole DB writer)
     <<: *common
@@ -24,8 +28,11 @@ services:
     <<: *common
     environment:
       DATA_DIR: /data
-      KALSHI_PRIVATE_KEY_PATH: /run/secrets/kalshi_key
+      KALSHI_ENV: demo
       TRADING_MODE: paper
+      KALSHI_REST_URL: https://external-api.demo.kalshi.co/trade-api/v2
+      KALSHI_WS_URL: wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2
+      KALSHI_PRIVATE_KEY_PATH: /run/secrets/kalshi_key
     command: ["alphalab", "paper", "--strategy", "market_maker", "--series", "KXBTC15M"]
 
   dashboard:

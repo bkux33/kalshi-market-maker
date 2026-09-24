@@ -3,6 +3,8 @@ trading_mode: paper
 series: [KXBTC15M, KXETH15M, KXSOL15M, KXXRP15M]
 kalshi:
   env: demo
+  rest_url: https://external-api.demo.kalshi.co/trade-api/v2
+  ws_url: wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2
   requests_per_second: 8.0
 data:
   dir: data

@@ -208,3 +208,78 @@ def test_combo_maker_fee_type_charges_makers():
     fm = FeeModel()
     fm.register_series("KXC", "quadratic_with_combo_maker_fees", 1.0)
     assert fm.fee("KXC-1", 5000, 100, is_taker=False) == pytest.approx(0.44)
+
+
+# ---------------------------------------------------------------- authoritative demo endpoints
+DEMO_REST_EXACT = "https://external-api.demo.kalshi.co/trade-api/v2"
+DEMO_WS_EXACT = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
+
+
+def test_demo_endpoints_are_exactly_the_authoritative_hosts():
+    assert DEMO_REST == DEMO_REST_EXACT and DEMO_WS == DEMO_WS_EXACT
+    s = load_settings(env={"KALSHI_ENV": "demo", "TRADING_MODE": "paper",
+                           "KALSHI_REST_URL": DEMO_REST_EXACT, "KALSHI_WS_URL": DEMO_WS_EXACT})
+    assert (s.kalshi.env, s.trading_mode) == ("demo", "paper")
+    assert (s.kalshi.rest_base, s.kalshi.ws_base) == (DEMO_REST_EXACT, DEMO_WS_EXACT)
+    with pytest.raises(ValueError, match="not a Kalshi demo host"):
+        load_settings(env={"KALSHI_ENV": "demo", "KALSHI_WS_URL": "wss://external-api-ws.kalshi.com/trade-api/ws/v2"})
+
+
+def test_shipped_config_templates_use_the_authoritative_demo_endpoints():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    s = load_settings(path=str(root / "config" / "alphalab.example.yaml"), env={})
+    assert (s.kalshi.env, s.trading_mode) == ("demo", "paper")
+    assert (s.kalshi.rest_base, s.kalshi.ws_base) == (DEMO_REST_EXACT, DEMO_WS_EXACT)
+    env = dict(line.split("=", 1) for line in (root / ".env.example").read_text().splitlines()
+               if line and not line.startswith("#") and "=" in line)
+    assert env["KALSHI_ENV"] == "demo" and env["TRADING_MODE"] == "paper"
+    assert env["KALSHI_REST_URL"] == DEMO_REST_EXACT and env["KALSHI_WS_URL"] == DEMO_WS_EXACT
+    assert not env.get("KALSHI_API_KEY_ID") and "LIVE_TRADING_ACK" not in env
+    compose = (root / "docker-compose.yml").read_text()
+    assert DEMO_REST_EXACT in compose and DEMO_WS_EXACT in compose and "TRADING_MODE: live" not in compose
+
+
+# ---------------------------------------------------------------- net-check (credential-free pre-flight)
+def test_netcheck_classifies_proxy_refusal_as_blocked(monkeypatch):
+    from alphalab.kalshi import netcheck
+
+    def refuse(request):
+        raise httpx.ProxyError("CONNECT tunnel failed, response 403", request=request)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(netcheck.httpx, "Client",
+                        lambda **kw: real_client(transport=httpx.MockTransport(refuse), **kw))
+    r = netcheck.check_rest(DEMO_REST_EXACT)
+    assert r["url"] == DEMO_REST_EXACT + "/exchange/status"
+    assert r["host"] == "external-api.demo.kalshi.co"
+    assert not r["reachable"] and r["result"] == "blocked_by_proxy"
+    assert netcheck._classify(Exception("proxy rejected connection: HTTP 403")) == "blocked_by_proxy"
+    assert netcheck._classify(ConnectionRefusedError("refused")) == "connection_error"
+
+
+def test_netcheck_rest_reachable_and_ws_server_rejection_counts_as_reachable(monkeypatch):
+    import threading
+    from websockets.sync.server import serve
+    from alphalab.kalshi import netcheck
+
+    real_client = httpx.Client
+    monkeypatch.setattr(netcheck.httpx, "Client", lambda **kw: real_client(
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"trading_active": True})), **kw))
+    assert netcheck.check_rest(DEMO_REST_EXACT)["result"] == "reachable"
+
+    # a real server that refuses the unauthenticated upgrade, as Kalshi does without credentials
+    server = serve(lambda ws: None, "127.0.0.1", 0,
+                   process_request=lambda conn, req: conn.respond(401, "authentication required\n"))
+    port = server.socket.getsockname()[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        ws = netcheck.check_ws(f"ws://127.0.0.1:{port}/trade-api/ws/v2", timeout=5)
+    finally:
+        server.shutdown()
+    assert ws["reachable"] and ws["handshake"] == "server_rejected_http_401"
+
+    r = netcheck.run_netcheck(DEMO_REST_EXACT, f"ws://127.0.0.1:{port}/trade-api/ws/v2")  # server now down
+    assert not r["ok"] and r["blocked_hosts"] == ["127.0.0.1"] and r["ws"]["result"] == "connection_error"
+    assert "NETWORK: BLOCKED: 127.0.0.1" in netcheck.format_netcheck(r)

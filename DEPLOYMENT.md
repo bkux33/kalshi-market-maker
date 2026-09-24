@@ -18,7 +18,11 @@ alphalab dashboard              # http://127.0.0.1:8080
 ```
 
 ## 2. Connect to DEMO, collect data and research
+DEMO endpoints (defaults; also set explicitly in `.env.example`): REST
+`https://external-api.demo.kalshi.co/trade-api/v2`, WebSocket `wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2`.
+Use the legacy host (`KALSHI_HOST_PROFILE=legacy`) only for a specific compatibility problem.
 ```bash
+alphalab net-check                                    # no credentials: DNS, REST status, WS handshake; exit 2 if blocked
 alphalab markets --active --search btc --sort volume  # public REST, no key needed; nothing hard-coded
 alphalab demo-check --n 3 --seconds 120               # DEMO only: auth, WS, book rebuild, REST cross-check
 alphalab record --search BTC --max-markets 10 --duration 3600 --external   # needs API key (WS auth)
