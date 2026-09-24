@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kalshi Alpha Lab</title>
+<link rel="icon" href="data:,">
 <style>
   :root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff; --line:#e2e2dc; --pos:#127a3a; --neg:#b3261e; --acc:#2b5cab; }
   @media (prefers-color-scheme: dark) { :root { --bg:#141413; --fg:#ecebe6; --muted:#9b9a93; --card:#1f1f1d; --line:#33332f; --pos:#58c27d; --neg:#f2837b; --acc:#8fb0ea; } }
@@ -44,6 +45,7 @@ const api = async (p, opt={}) => {
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const num = (v, d=2) => v === null || v === undefined ? '<span class="muted">n/a</span>' : (typeof v === "number" ? v.toFixed(d) : esc(v));
 const money = v => v === null || v === undefined ? '<span class="muted">n/a</span>' : `<span class="${v>0?'pos':v<0?'neg':''}">${v<0?'-':''}$${Math.abs(v).toFixed(2)}</span>`;
+const usd = v => v === null || v === undefined ? '<span class="muted">n/a</span>' : `${v<0?'-':''}$${Math.abs(v).toFixed(2)}`;  // neutral: costs, drawdowns
 const ts = ns => ns ? new Date(ns/1e6).toISOString().replace("T"," ").slice(0,19) : "";
 const page = () => { const p = location.pathname.replace(/^\//, ""); return PAGES.includes(p) ? p : "dashboard"; };
 
@@ -81,8 +83,8 @@ R.dashboard = async el => {
   for (const m of ["paper", "live"]) {
     const s = o[m]; if (!s) { h += `<div class="card muted">no ${m} session running</div>`; continue; }
     h += `<div class="card"><b>${m.toUpperCase()} session</b> <span class="note">${esc(s.run_id)} · updated ${num(s.age_s,1)}s ago</span>${kpis([
-      ["Equity (net)", money(s.pnl?.equity)], ["Realized", money(s.pnl?.realized)], ["Unrealized", money(s.pnl?.unrealized)], ["Fees", money(s.pnl?.fees)],
-      ["Fills", num(s.metrics?.n_fills, 0)], ["Max drawdown", money(s.metrics?.max_drawdown)], ["Positions", num(s.n_positions,0)], ["Open orders", num(s.n_open_orders,0)],
+      ["Equity (net)", money(s.pnl?.equity)], ["Realized", money(s.pnl?.realized)], ["Unrealized", money(s.pnl?.unrealized)], ["Fees", usd(s.pnl?.fees)],
+      ["Fills", num(s.metrics?.n_fills, 0)], ["Max drawdown", usd(s.metrics?.max_drawdown)], ["Positions", num(s.n_positions,0)], ["Open orders", num(s.n_open_orders,0)],
       ["Daily P&L", money(s.risk?.daily_pnl)], ["Halted", s.risk?.halted ? '<span class="neg">'+esc(s.risk.halt_reason)+'</span>' : "no"]])}</div>`;
   }
   h += `<div class="card"><b>Experiment status counts</b>${table(o.status_counts || [])}</div>`;
@@ -122,7 +124,7 @@ R.experiments = async el => {
   const rows = await api("/api/experiments");
   const cols = [["name","experiment",(v,r)=>`<a href="#" onclick="showExp('${r.experiment_id}');return false">${esc(v)}</a>`],["strategy","strategy",esc],["status","status",v=>`<span class="badge ${v}">${esc(v)}</span>`],
     ["oos_trades","OOS trades",v=>num(v,0)],["oos_net","OOS net",money],["oos_expectancy","OOS expectancy",v=>num(v,4)],["is_expectancy","IS expectancy",v=>num(v,4)],["oos_sharpe_trade","OOS Sharpe/trade",v=>num(v,3)],
-    ["oos_max_dd","OOS max DD",money],["oos_fees","OOS fees",money],["holdout_net","holdout net",money],["grid_points","grid pts",v=>num(v,0)],["gating_flags","gating flags",v=>esc((v||[]).join(", "))]];
+    ["oos_max_dd","OOS max DD",usd],["oos_fees","OOS fees",usd],["holdout_net","holdout net",money],["grid_points","grid pts",v=>num(v,0)],["gating_flags","gating flags",v=>esc((v||[]).join(", "))]];
   const draw = () => { el.innerHTML = `<div class="card"><b>Experiments</b><p class="note">Objective validation results, sortable by any column. Sorting is not a ranking of future performance; OOS = walk-forward out-of-sample.</p>${table(rows, cols)}</div><div class="card" id="exp"></div>`; sortable(el, rows, cols, draw); };
   draw();
 };
@@ -130,7 +132,7 @@ window.showExp = async id => { const e = await api("/api/experiments/" + id); do
 R.backtests = async el => {
   const rows = await api("/api/runs");
   const cols = [["run_id","run",(v,r)=>`<a href="#" onclick="showRun('${v}');return false">${esc(v)}</a>`],["kind","kind",esc],["phase","phase",esc],["strategy","strategy",esc],["n_trades","trades",v=>num(v,0)],
-    ["gross_pnl","gross",money],["fees","fees",money],["net_pnl","net",money],["expectancy","expectancy",v=>num(v,4)],["max_drawdown","max DD",money],["fill_rate","fill rate",v=>num(v,3)],["adverse_selection_c","adverse sel. (c)",v=>num(v,2)],["created_ns","created",ts]];
+    ["gross_pnl","gross",money],["fees","fees",usd],["net_pnl","net",money],["expectancy","expectancy",v=>num(v,4)],["max_drawdown","max DD",usd],["fill_rate","fill rate",v=>num(v,3)],["adverse_selection_c","adverse sel. (c)",v=>num(v,2)],["created_ns","created",ts]];
   const draw = () => { el.innerHTML = `<div class="card"><b>Runs</b> <span class="note">backtest / experiment / paper runs</span>${table(rows, cols)}</div><div class="card" id="run"></div>`; sortable(el, rows, cols, draw); };
   draw();
 };
@@ -138,10 +140,10 @@ window.showRun = async id => { const p = await api(`/api/runs/${id}/pnl`); docum
 R.paper = async el => {
   const s = await api("/api/state/paper");
   if (s.error) { el.innerHTML = `<div class="card muted">${esc(s.error)}. Start one with <code>alphalab paper --strategy …</code></div>`; return; }
-  el.innerHTML = `<div class="card"><b>Paper session ${esc(s.run_id)}</b> <span class="note">simulated fills on live data · updated ${num(s.age_s,1)}s ago</span>${kpis([["Equity", money(s.pnl.equity)],["Fees", money(s.pnl.fees)],["Fills", num(s.metrics.n_fills,0)],["Fill rate", num(s.metrics.fill_rate,3)],["Adverse sel. (c)", num(s.metrics.adverse_selection_c,2)]])}${chart(s.pnl.curve, "equity")}</div>
+  el.innerHTML = `<div class="card"><b>Paper session ${esc(s.run_id)}</b> <span class="note">simulated fills, never real orders · updated ${num(s.age_s,1)}s ago</span>${kpis([["Equity", money(s.pnl.equity)],["Fees", usd(s.pnl.fees)],["Fills", num(s.metrics.n_fills,0)],["Fill rate", num(s.metrics.fill_rate,3)],["Adverse sel. (c)", num(s.metrics.adverse_selection_c,2)]])}${chart(s.pnl.curve, "equity")}</div>
     <div class="card"><b>Positions</b>${table(s.positions)}</div><div class="card"><b>Open orders</b>${table(s.open_orders, [["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],["status","status",esc],["tag","tag",esc]])}</div>
     <div class="card"><b>Recent signals</b>${table((s.recent.signals||[]).slice(-50).reverse(), [["ts_ns","time",ts],["strategy","strategy",esc],["market","market",esc],["name","signal",esc],["value","value",v=>num(v,4)]])}</div>
-    <div class="card"><b>Recent fills</b>${table((s.recent.fills||[]).slice(-50).reverse(), [["ts_ns","time",ts],["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],["liquidity","liq",esc],["fee","fee",money]])}</div>`;
+    <div class="card"><b>Recent fills</b>${table((s.recent.fills||[]).slice(-50).reverse(), [["ts_ns","time",ts],["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],["liquidity","liq",esc],["fee","fee",usd]])}</div>`;
 };
 R.risk = async el => {
   const r = await api("/api/risk");
@@ -155,13 +157,13 @@ R.trades = async el => {
   const run = new URLSearchParams(location.search).get("run_id");
   const rows = await api("/api/trades" + (run ? "?run_id=" + encodeURIComponent(run) : ""));
   const cols = [["ts_ns","time",ts],["run_id","run",esc],["mode","mode",esc],["strategy","strategy",esc],["market","market",esc],["action","side",esc],["price","price (c)",v=>num(v/100,1)],["qty","qty",v=>num(v,0)],
-    ["liquidity","liq",esc],["fee","fee",money],["slippage_usd","vs mid $",v=>num(v,4)],["markout_30s","markout 30s $",v=>num(v,4)]];
+    ["liquidity","liq",esc],["fee","fee",usd],["slippage_usd","vs mid $",v=>num(v,4)],["markout_30s","markout 30s $",v=>num(v,4)]];
   const draw = () => { el.innerHTML = `<div class="card"><b>Fills</b> <span class="note">newest first (max 500); add ?run_id=… to filter</span>${table(rows, cols)}</div>`; sortable(el, rows, cols, draw); };
   draw();
 };
 R.performance = async el => {
   const p = await api("/api/performance");
-  el.innerHTML = `<div class="card"><b>Performance by evidence type</b><p class="note">${esc(p.note)}</p>${table(p.rows, [["kind","evidence",esc],["strategy","strategy",esc],["runs","runs",v=>num(v,0)],["trades","trades",v=>num(v,0)],["net_pnl","net",money],["fees","fees",money]])}</div>`;
+  el.innerHTML = `<div class="card"><b>Performance by evidence type</b><p class="note">${esc(p.note)}</p>${table(p.rows, [["kind","evidence",esc],["strategy","strategy",esc],["runs","runs",v=>num(v,0)],["trades","trades",v=>num(v,0)],["net_pnl","net",money],["fees","fees",usd]])}</div>`;
   try { const f = await api("/api/predictive"); el.innerHTML += `<div class="card"><b>Latest predictive-feature study</b>${table(f, [["feature","feature",esc],["horizon_s","horizon s",v=>num(v,0)],["split","split",esc],["n","n",v=>num(v,0)],["ic","IC",v=>num(v,3)],["ic_tstat","t",v=>num(v,2)],["cost_hurdle","hurdle c",v=>num(v,2)],["net_edge_top","net edge top c",v=>num(v,2)],["net_edge_bottom","net edge bottom c",v=>num(v,2)]])}</div>`; } catch (e) {}
 };
 R.settings = async el => { const s = await api("/api/settings"); el.innerHTML = `<div class="card"><b>Effective settings</b> <span class="note">secrets redacted; edit the YAML/env and restart</span><pre>${esc(JSON.stringify(s, null, 2))}</pre></div>`; };

@@ -108,8 +108,10 @@ class TradingSession:
             del lst[: len(lst) - keep]
 
     def _on_risk(self, typ: str, severity: str, detail: Dict[str, Any]) -> None:
-        row = {"run_id": self.run_id, "mode": self.mode, "type": typ, "severity": severity,
-               "ts_ns": detail.get("ts_ns") or self.engine.now_ns if hasattr(self, "engine") else time.time_ns(), **detail}
+        ts = detail.get("ts_ns")
+        if ts is None:
+            ts = self.engine.now_ns if hasattr(self, "engine") else time.time_ns()
+        row = {"run_id": self.run_id, "mode": self.mode, "type": typ, "severity": severity, **detail, "ts_ns": ts}
         self.journal.write("risk", row)
         self._push("risk", row)
 

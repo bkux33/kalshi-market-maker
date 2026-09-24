@@ -1,0 +1,39 @@
+# Kalshi Alpha Lab services. Nothing here trades real money: the trader runs in PAPER mode.
+# Usage:  cp .env.example .env  (fill in KALSHI_API_KEY_ID)  &&  docker compose up -d recorder paper dashboard
+x-common: &common
+  build: .
+  env_file: .env
+  environment:
+    DATA_DIR: /data
+    KALSHI_PRIVATE_KEY_PATH: /run/secrets/kalshi_key
+  volumes:
+    - ./data:/data
+  secrets: [kalshi_key]
+  restart: unless-stopped
+
+services:
+  recorder:            # raw market data -> append-only tape
+    <<: *common
+    command: ["alphalab", "record", "--series", "KXBTC15M", "KXETH15M", "--external"]
+
+  ingester:            # periodically loads closed tape files/journals into DuckDB (sole DB writer)
+    <<: *common
+    command: ["sh", "-c", "while true; do alphalab ingest; sleep 900; done"]
+
+  paper:               # paper trading on live data (simulated fills only)
+    <<: *common
+    environment:
+      DATA_DIR: /data
+      KALSHI_PRIVATE_KEY_PATH: /run/secrets/kalshi_key
+      TRADING_MODE: paper
+    command: ["alphalab", "paper", "--strategy", "market_maker", "--series", "KXBTC15M"]
+
+  dashboard:
+    <<: *common
+    secrets: []
+    ports: ["127.0.0.1:8080:8080"]   # localhost only; use an SSH tunnel for remote access
+    command: ["alphalab", "dashboard", "--host", "0.0.0.0", "--port", "8080"]
+
+secrets:
+  kalshi_key:
+    file: ${KALSHI_KEY_FILE:-./secrets/kalshi.pem}

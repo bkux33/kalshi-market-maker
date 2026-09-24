@@ -1,0 +1,18 @@
+Kalshi Alpha Lab
+Copyright 2026 the Kalshi Alpha Lab contributors
+
+This project is derived from kalshi-market-maker
+(https://github.com/zachdaube/kalshi-market-maker), Copyright its authors,
+licensed under the Apache License, Version 2.0 (see LICENSE). The original
+code is preserved unmodified under legacy/. Files in alphalab/ that follow
+upstream designs (order-book YES/NO conversion, Avellaneda-Stoikov quoting,
+market-scanner heuristics) say so in their module docstrings.
+
+Architectural ideas (not code) were taken from:
+  - ericsohel/KalshiTradingProject (MIT): raw WebSocket frames recorded to an
+    append-only tape before parsing, deterministic replay.
+  - reedjacobp/kalshi-trading-bot (MIT per package.json): fixed-point message
+    formats as documented in the Kalshi OpenAPI/AsyncAPI specifications.
+
+"Kalshi" is a trademark of KalshiEX LLC. This project is not affiliated with,
+endorsed by, or sponsored by Kalshi.

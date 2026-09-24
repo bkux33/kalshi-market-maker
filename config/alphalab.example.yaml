@@ -1,0 +1,41 @@
+# Kalshi Alpha Lab configuration. Secrets are NOT allowed here (use environment variables).
+trading_mode: paper
+series: [KXBTC15M, KXETH15M, KXSOL15M, KXXRP15M]
+kalshi:
+  env: demo
+  requests_per_second: 8.0
+data:
+  dir: data
+fees:
+  taker_rate: 0.07
+  maker_rate: 0.0175       # conservative default for series whose fee_type is unknown
+  rounding: ceil_cent
+  series:                  # per-series overrides; recorded series metadata also applies
+    KXBTC15M: {fee_type: quadratic, fee_multiplier: 1.0}
+fill:                      # explicit simulation assumptions (backtest AND paper)
+  order_latency_ms: 150
+  cancel_latency_ms: 150
+  maker_fill_mode: queue   # queue | cross_only
+  queue_cancel_model: pro_rata   # pro_rata | back | front
+  allow_touch_fill: false
+  trade_through_fills_all: true
+  taker_slippage_ticks: 0
+risk:
+  max_order_size: 10
+  max_position_per_market: 50
+  max_market_exposure_usd: 50
+  max_total_exposure_usd: 200
+  max_strategy_exposure_usd: 150
+  max_daily_loss_usd: 25
+  max_drawdown_usd: 50
+  max_orders_per_second: 5
+  max_open_orders: 20
+  stale_data_s: 5
+  settlement_buffer_s: 60
+  on_disconnect: cancel_all
+validation:
+  min_trades_paper: 300
+  min_distinct_days_paper: 5
+  min_distinct_markets_paper: 10
+  max_grid_size: 64
+  random_benchmark_trials: 200
