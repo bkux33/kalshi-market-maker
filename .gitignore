@@ -71,7 +71,7 @@ config/credentials.yaml
 
 # Kalshi Alpha Lab runtime data (never commit market data, journals, keys or state)
 .venv/
-data/
+/data/
 reports/
 *.duckdb
 *.duckdb.wal
